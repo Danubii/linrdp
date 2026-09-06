@@ -99,6 +99,8 @@ the client reports credential delegation without claiming confirmed login.
 Both commands disconnect afterward; no desktop session is started.
 
 The full login exchange passes loopback tests using real TLS and NTLM crypto.
-Only the credential-free NLA probe has been tested against the Windows host;
-real-host login remains unverified. See [CredSSP status](docs/credssp.md) and the
+A real Windows standard-account test also passed NTLM authentication, CredSSP
+binding and early authorization with an explicitly selected certificate pin.
+See the [Windows test report](docs/windows-first-probe.md),
+[CredSSP status](docs/credssp.md) and the
 [test host guide](docs/test-hosts.md).

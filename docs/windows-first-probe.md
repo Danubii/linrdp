@@ -124,3 +124,27 @@ user with the appropriate remote-logon rights.
 
 References: [early authorization processing](https://winprotocoldoc.z19.web.core.windows.net/MS-RDPBCGR/%5BMS-RDPBCGR%5D-220903.pdf),
 [Microsoft RDS authorization troubleshooting](https://learn.microsoft.com/en-us/troubleshoot/windows-server/remote/troubleshooting-access-denied-and-user-not-authorized-rds-issues).
+
+## Successful standard-user authorization
+
+Date: 2026-09-06. Client implementation: `631ba91` (documentation HEAD
+`bf0cfdc`). After the user reported granting RDP access to the standard test
+account, one further login attempt against the same host exited successfully.
+The previously selected certificate pin was used again; it remains without
+independent fingerprint confirmation. No account identifiers or passwords are
+included in this report.
+
+| Check | Result |
+| --- | --- |
+| RDP negotiation | CredSSP (NLA) with early authorization |
+| TLS | TLS 1.3, `TLS13_AES_256_GCM_SHA384`; explicit certificate pin verified |
+| NTLM authentication and server CredSSP binding proof | Succeeded |
+| Sealed credential delegation | Sent |
+| Server early authorization | Succeeded (`0x00000000`) |
+| Client exit code | 0 |
+| Desktop session | Not started; diagnostic disconnects after authorization |
+
+This confirms the complete authentication and early authorization path against
+this Windows test host. It does not validate MCS/GCC setup, session activation,
+graphics or input, which remain unimplemented. This was a real-host diagnostic
+run with the existing release binary; no implementation changes were required.
