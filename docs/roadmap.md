@@ -17,7 +17,8 @@ All items below are planned unless explicitly marked complete.
 - [x] CredSSP v5/v6 TLS binding state machine behind a provider interface.
 - [x] NTLM provider, TLS integration and hidden-password login diagnostic.
 - [x] Credential-free NLA probe against Windows.
-- Verify actual Windows account authentication and early authorization.
+- [x] Verify actual Windows NTLM account authentication and CredSSP binding.
+- Verify successful early authorization with an RDP-authorized account.
 - MCS/GCC connection setup, capabilities and session activation.
 - Basic bitmap output and keyboard/pointer input.
 - Demonstrate an actual Windows desktop session before calling this usable.
@@ -41,8 +42,9 @@ All items below are planned unless explicitly marked complete.
 
 The [first Windows host check](windows-first-probe.md) passed RDP negotiation and
 TLS 1.3 with an explicitly selected certificate pin, after system trust rejected
-the issuer. The pin was not independently confirmed on Windows. An account login attempt returned `STATUS_LOGON_FAILURE`; successful
-authentication remains unverified.
+the issuer. The pin was not independently confirmed on Windows. A subsequent standard-account test completed NTLM authentication and CredSSP
+binding, then received `AUTHZ_ACCESS_DENIED` during early authorization.
+Successful session authorization remains unverified.
 Record server OS/version, client display system, authentication mode, resolution,
 codec and outcome for each future run.
 Loopback fixtures establish protocol behavior only, not server interoperability.

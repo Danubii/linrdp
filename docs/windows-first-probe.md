@@ -104,3 +104,23 @@ Windows logon failure event before choosing the next authentication test.
 The decoder fix retains strict DER validation and rejects values outside the
 signed/unsigned 32-bit range. Independent signed-status and overflow vectors
 were added. All 58 tests, Clippy and the release build passed locally.
+
+## Standard-user authentication and authorization check
+
+Date: 2026-09-06. Client: `631ba91`. A user-provided standard test account
+was tested once with the same explicit certificate pin. Account identifiers
+and credentials are omitted from this public report.
+
+TLS verification, NTLM authentication and verification of the server's CredSSP
+binding proof completed. The client sent sealed delegated credentials, then
+received early authorization result `0x00000005` (`AUTHZ_ACCESS_DENIED`) and
+exited with failure. No desktop session was started.
+
+This establishes real Windows authentication and binding interoperability,
+but not permission to start an RDP session. Check membership in Remote Desktop
+Users and the effective remote-logon allow/deny policies on the host before
+retesting. Administrator membership is not required for an ordinary desktop
+user with the appropriate remote-logon rights.
+
+References: [early authorization processing](https://winprotocoldoc.z19.web.core.windows.net/MS-RDPBCGR/%5BMS-RDPBCGR%5D-220903.pdf),
+[Microsoft RDS authorization troubleshooting](https://learn.microsoft.com/en-us/troubleshoot/windows-server/remote/troubleshooting-access-denied-and-user-not-authorized-rds-issues).
