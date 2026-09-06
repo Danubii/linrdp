@@ -1,0 +1,38 @@
+# Roadmap
+
+All items below are planned unless explicitly marked complete.
+
+## 0 — Foundation
+
+- Public repository, MIT license, Rust workspace and CI.
+- TPKT/X.224 security negotiation codec and diagnostic command.
+- Malformed input tests and local transport tests.
+
+## 1 — First authenticated session
+
+- TLS with certificate validation and explicit trust handling.
+- CredSSP/NLA authentication; no plaintext credential persistence.
+- MCS/GCC connection setup, capabilities and session activation.
+- Basic bitmap output and keyboard/pointer input.
+- Demonstrate an actual Windows desktop session before calling this usable.
+
+## 2 — Simple desktop client
+
+- Native connection window: address, connect, credentials.
+- Session window, resize, fullscreen and useful connection errors.
+- Validate against Windows RDP, xrdp and GNOME Remote Desktop.
+- Test Danish/US keyboards, Wayland/X11, scaling and network interruption.
+
+## 3 — Everyday use
+
+- Clipboard, audio, recent connections and opt-in keyring integration.
+- Graphics pipeline and hardware-assisted decoding where supported.
+- Measure delivered FPS, frame pacing, memory and input-to-display latency.
+- Compare with an established client on identical hosts and networks.
+- Build/install/remove tests for Arch and Debian/Ubuntu packages.
+
+## Compatibility evidence
+
+No real RDP host has been tested yet. Record server OS/version, client display
+system, authentication mode, resolution, codec and outcome for each future run.
+Loopback fixtures establish protocol behavior only, not server interoperability.

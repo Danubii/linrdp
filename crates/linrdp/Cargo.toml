@@ -1,0 +1,14 @@
+[package]
+name = "linrdp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A simple Linux RDP client (early development)"
+publish = false
+
+[dependencies]
+linrdp-proto = { path = "../linrdp-proto" }
+
+[lints]
+workspace = true
