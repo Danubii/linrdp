@@ -37,11 +37,12 @@ pub fn config(ca_file: Option<&Path>) -> Result<Arc<ClientConfig>, Error> {
 }
 
 fn config_with_roots(roots: RootCertStore) -> Arc<ClientConfig> {
-    Arc::new(
-        ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth(),
-    )
+    let mut config = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    // MS-CSSP 3.1.5: CredSSP does not support TLS session resumption.
+    config.resumption = rustls::client::Resumption::disabled();
+    Arc::new(config)
 }
 
 /// The supplied hostname/IP is checked against the certificate SAN, not reverse DNS.

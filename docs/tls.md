@@ -9,6 +9,7 @@ authentication implementations.
 
 - Use rustls 0.23 with its standard verifier and ring cryptographic provider.
 - Enable TLS 1.2 and TLS 1.3; do not fall back to legacy RDP security or old TLS.
+- Disable TLS session resumption as required by MS-CSSP section 3.1.5.
 - Load platform roots through rustls-native-certs by default. Its
   `SSL_CERT_FILE` and `SSL_CERT_DIR` environment overrides apply.
 - An explicit `--ca <pem-file>` replaces platform roots for this invocation.
