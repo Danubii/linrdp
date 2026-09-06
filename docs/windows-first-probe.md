@@ -59,3 +59,25 @@ This establishes a working LinRDP TLS handshake with the host presenting the
 selected certificate and proving possession of its private key. It does not
 establish independently confirmed host identity, NLA login or desktop support.
 Local validation also passed 42 tests, Clippy, formatting and a release build.
+
+## Credential-free NLA probe
+
+Implementation: `d9c33ef`. The new `nla-probe` command was tested against the
+same Windows host with the same explicitly selected certificate pin. This
+adds a real CredSSP request/response over TLS without attempting account login.
+
+| Check | Result |
+| --- | --- |
+| `linrdp nla-probe <host> 3389 --cert-sha256 <selected-fingerprint>` | Exit 0 |
+| TLS | TLS 1.3, `TLS13_AES_256_GCM_SHA384` |
+| CredSSP | Server version 6 |
+| NTLM | Type 2 challenge received after the credential-free Type 1 token |
+| Challenge policy | Required signing, sealing, extended-session security, target info, 128-bit security and key exchange present |
+| Credentials / Type 3 response sent | None |
+
+The complete login path passes local tests using real TLS and NTLM contexts,
+including binding, credential delegation and early authorization. Those peers
+are synthetic fixtures, not Windows account validation. Real-host account login
+has not been attempted. Local checks passed 56 tests, Clippy, formatting and a
+release build. Host identity remains based on the previously selected pin,
+without independent fingerprint confirmation on Windows.
