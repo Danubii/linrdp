@@ -1,11 +1,13 @@
-//! First-desktop slow-path RDP profile (MS-RDPBCGR).
+//! First-desktop RDP profile (MS-RDPBCGR).
 //! Enhanced security, valid-client licensing, bitmap output, no drawing orders.
 use std::fmt;
 
 mod bitmap;
 mod capabilities;
+mod fastpath;
 mod pointer;
 pub use bitmap::Framebuffer;
+pub use fastpath::frame_length;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error(pub String);
@@ -40,6 +42,7 @@ pub struct Session {
     cooperated: bool,
     granted: bool,
     pointer: pointer::Pointer,
+    fragment: Option<(u8, Vec<u8>)>,
     pub revision: u64,
     refresh_supported: bool,
     pub notifications: Vec<String>,
@@ -60,6 +63,7 @@ impl Session {
             cooperated: false,
             granted: false,
             pointer: pointer::Pointer::default(),
+            fragment: None,
             revision: 0,
             refresh_supported: false,
             notifications: Vec::new(),
@@ -151,6 +155,8 @@ impl Session {
                     self.server = source;
                     self.refresh_supported = demand.refresh;
                     self.framebuffer = Framebuffer::new(demand.width, demand.height)?;
+                    self.fragment = None;
+                    self.pointer = pointer::Pointer::default();
                     self.synchronized = false;
                     self.cooperated = false;
                     self.granted = false;

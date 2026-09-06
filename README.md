@@ -3,7 +3,7 @@
 A simple Linux RDP client: enter a computer address, connect, and get to work.
 Think VLC for RDP. Open source from the first commit.
 
-**Early development. Native read-only viewer implemented; first real desktop bitmap not yet verified.**
+**Early development. Native read-only Windows desktop display verified. Interactive input is not implemented yet.**
 
 We are building our own RDP engine in Rust, interoperating with existing
 Windows and Linux RDP servers. This project contains only a client.
@@ -86,8 +86,8 @@ The codec and transport have synthetic/loopback tests. The
 [first Windows host check](docs/windows-first-probe.md) passed RDP negotiation and
 TLS 1.3 with an explicitly selected certificate pin. System trust rejected the
 issuer; the selected pin was not independently confirmed on Windows.
-Authenticated sessions and Linux server
-interoperability remain unverified. No installable distro packages have been published.
+Windows authentication, activation and first desktop display have passed. Linux
+server interoperability remains unverified. No installable distro packages have been published.
 
 See [architecture](docs/architecture.md), [roadmap](docs/roadmap.md), and
 [contributing](CONTRIBUTING.md). Licensed under [MIT](LICENSE).

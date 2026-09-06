@@ -80,10 +80,10 @@ pub(super) fn confirm(user: u16, server: u16, d: Demand) -> Result<Vec<u8>> {
         caps.extend(body);
         count += 1;
     };
-    // Unix/native X server, protocol 0x200, no fast-path or bulk compression.
+    // Unix/native X server, protocol 0x200, no bulk compression.
     let mut general = vec![0; 20];
     general[..6].copy_from_slice(&[4, 0, 7, 0, 0, 2]);
-    general[10..12].copy_from_slice(&0x0400u16.to_le_bytes()); // no bitmap compression header supported
+    general[10..12].copy_from_slice(&0x0401u16.to_le_bytes()); // fast-path output and omitted bitmap compression headers
     add(1, &general);
     let mut bitmap = vec![0; 24];
     bitmap[..8].copy_from_slice(&[16, 0, 1, 0, 1, 0, 1, 0]);

@@ -2,10 +2,10 @@
 use crate::{session, tls};
 use linrdp_proto::{
     data,
-    desktop::{Phase, Session},
+    desktop::{Phase, Session, frame_length},
     negotiation::SecurityProtocol,
 };
-use minifb::{Window, WindowOptions};
+use minifb::{ScaleMode, Window, WindowOptions};
 use std::{
     io,
     net::{Shutdown, TcpStream},
@@ -56,6 +56,7 @@ pub fn run(
         768,
         WindowOptions {
             resize: true,
+            scale_mode: ScaleMode::AspectRatioStretch,
             ..WindowOptions::default()
         },
     )?;
@@ -157,12 +158,16 @@ fn receive(
                 if pending.len() > u16::MAX as usize + bytes.len() {
                     return Err("desktop receive buffer exceeded limit".into());
                 }
-                while let Some(length) = data::frame_length(&pending)? {
+                while let Some(length) = frame_length(&pending)? {
                     if pending.len() < length {
                         break;
                     }
-                    let payload = data::decode(&pending[..length])?;
-                    let replies = state.receive(payload)?;
+                    let replies = if pending[0] == 3 {
+                        state.receive(data::decode(&pending[..length])?)?
+                    } else {
+                        state.receive_fastpath(&pending[..length])?;
+                        Vec::new()
+                    };
                     for message in state.notifications.drain(..) {
                         println!("{message}");
                         shared.lock().unwrap().status = message;

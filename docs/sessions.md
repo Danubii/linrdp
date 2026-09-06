@@ -1,6 +1,8 @@
 # Session behavior
 
-This describes the intended client behavior, not currently available UI features.
+The `connect` command currently opens one read-only remote desktop window.
+Closing that window disconnects without requesting sign-out. Other UI behavior
+described below remains planned unless explicitly marked implemented.
 The login diagnostic stops after successful early authorization. The separate
 `session-probe` continues through basic settings exchange and channel setup.
 
@@ -48,13 +50,15 @@ cases, rather than assuming all Linux RDP hosts have identical behavior.
    input, fragmentation and size-boundary tests; integrated into `session-probe`.
 2. MCS/GCC settings exchange and channel setup: implemented over authenticated
    TLS, tested against Windows with the user and I/O channels.
-3. Client information, licensing, capabilities and session activation.
-4. Bitmap display and keyboard/pointer input in one window.
+3. Client information, valid-client licensing, capabilities and session activation: implemented.
+4. Bitmap display in one window: implemented and visually verified against Windows.
+   Keyboard/pointer input forwarding remains planned.
 5. Disconnect/reconnect behavior against real hosts, then concurrent connections.
 
 Authentication and early authorization have passed on a Windows test host.
-Basic settings and channel setup have also passed on that host. Client info,
-licensing, activation and desktop behavior remain unimplemented.
+Basic settings, channel setup, Client Info, licensing, activation and first
+desktop display have also passed on that host. Closing the viewer exits with
+status 0. Automatic reconnection and multi-session management are not implemented.
 
 ## References
 

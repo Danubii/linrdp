@@ -173,3 +173,40 @@ stops before Client Info, licensing and capability exchange. No user desktop
 was activated. Pin trust remains explicitly selected and was not independently
 confirmed on Windows. Local validation passed 69 tests, Clippy, formatting and
 a release build.
+
+## First native desktop display
+
+Date: 2026-09-06. The `connect` viewer and fast-path implementation accompanying
+this report were tested against the same Windows host and standard account.
+The client ran on Arch Linux with Hyprland/Wayland. The precise Windows edition
+and build were not collected. Private captures and credentials are excluded
+from the repository; certificate-pin provenance remains as described above.
+
+| Check | Result |
+| --- | --- |
+| TLS / NTLM CredSSP / early authorization | Succeeded |
+| MCS/GCC and mandatory channel joins | Succeeded |
+| Client Info / valid-client licensing | Accepted |
+| Demand Active / Confirm Active / synchronization / control / Font Map | Completed |
+| First bitmap | Displayed in the native LinRDP window |
+| Negotiated display | 1024×768, 16-bit RGB565 |
+| Output profile | Fast-path bitmap updates, interleaved RLE enabled, bulk compression disabled |
+| Visual inspection | Actual Windows wallpaper, desktop icons and taskbar |
+| Local display scaling | Aspect ratio preserved in a 949×1045 window |
+| Static desktop / normal window close | Remained connected through idle; close exited with status 0 |
+| Manual reconnect | Authenticated again and displayed the Windows desktop |
+| Keyboard / mouse forwarding | Not implemented or tested |
+
+A slow-path-only activation initially produced no image. A temporary FreeRDP
+3.30.0 reference client displayed the desktop with its default fast-path
+settings; a configuration disabling both fast-path input and output was black.
+Enabling fast-path **output** in LinRDP resolved the first-image failure while
+leaving its input transport unchanged. The reference client is not a project
+runtime dependency and was not used to render LinRDP's verified image.
+
+The viewer closes the connection without sending logoff. This test does not
+establish automatic reconnection, application-state persistence, Linux-server
+compatibility, interactive usability or performance/FPS guarantees. minifb's
+Wayland backend printed proxy-cleanup warnings on normal closure; exit status
+was still 0. Local checks passed 79 tests, formatting, Clippy with warnings
+denied, and a locked release build.

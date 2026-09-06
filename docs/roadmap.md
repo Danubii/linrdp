@@ -21,9 +21,11 @@ All items below are planned unless explicitly marked complete.
 - [x] Verify successful early authorization with an RDP-authorized account.
 - [x] Bounded TPKT/X.224 data codec integrated into a session probe.
 - [x] MCS/GCC basic settings and user/I/O channel setup tested against Windows.
-- Client information, licensing, capabilities and session activation.
-- Basic bitmap output and keyboard/pointer input.
-- Demonstrate an actual Windows desktop session before calling this usable.
+- [x] Client information, valid-client licensing, capabilities and session activation.
+- [x] Basic raw/RLE bitmap output through slow-path and fast-path in a native window.
+- Keyboard/pointer input forwarding.
+- [x] Demonstrate an actual Windows desktop in the read-only viewer.
+- Validate interactive use before calling the client usable for everyday work.
 
 ## 2 — Simple desktop client
 
@@ -49,7 +51,8 @@ the issuer. The pin was not independently confirmed on Windows. A standard-accou
 test completed NTLM authentication and CredSSP binding. After the user granted
 RDP access, early authorization also succeeded and the client exited with code 0.
 MCS/GCC settings and user/I/O channel setup also passed on this host.
-Desktop activation, graphics and input remain unimplemented.
+Client Info, licensing, activation and first bitmap display also passed on this
+host through the native Wayland viewer. Keyboard/mouse input remains unimplemented.
 Record server OS/version, client display system, authentication mode, resolution,
 codec and outcome for each future run.
 Loopback fixtures establish protocol behavior only, not server interoperability.

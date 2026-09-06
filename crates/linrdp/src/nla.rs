@@ -98,9 +98,7 @@ fn exchange(
     drop(credentials);
     if protocol == SecurityProtocol::CredSspEarlyAuth {
         tls::read_authorization(connection, stream)?;
-        println!(
-            "CredSSP binding verified; Server early authorization succeeded. No desktop session was started."
-        );
+        println!("CredSSP binding verified; Server early authorization succeeded.");
     } else {
         println!(
             "CredSSP binding verified and credentials delegated. Server has no early authorization result; desktop login is not confirmed."
