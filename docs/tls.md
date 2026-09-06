@@ -69,8 +69,9 @@ temporary files contain public certificates and are removed after tests.
 
 These fixtures are not evidence of Windows, xrdp or GNOME interoperability.
 The [first Windows host check](windows-first-probe.md) passed negotiation and
-stopped during TLS verification with `UnknownIssuer`. A successful verified TLS
-handshake against a real RDP host remains outstanding.
+TLS 1.3 using an explicitly selected certificate pin. System trust rejected the
+issuer. The user chose the previously observed certificate for the pin without
+independent host-side confirmation; see the report for the exact trust basis.
 
 ## References
 

@@ -37,8 +37,10 @@ All items below are planned unless explicitly marked complete.
 
 ## Compatibility evidence
 
-The [first Windows host check](windows-first-probe.md) passed RDP negotiation;
-TLS stopped with `UnknownIssuer`. No authenticated session has been tested.
+The [first Windows host check](windows-first-probe.md) passed RDP negotiation and
+TLS 1.3 with an explicitly selected certificate pin, after system trust rejected
+the issuer. The pin was not independently confirmed on Windows. No authenticated
+session has been tested.
 Record server OS/version, client display system, authentication mode, resolution,
 codec and outcome for each future run.
 Loopback fixtures establish protocol behavior only, not server interoperability.

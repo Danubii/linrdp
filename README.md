@@ -72,8 +72,10 @@ user authentication or a desktop session succeeded. The command disconnects
 after the handshake and never sends credentials.
 
 The codec and transport have synthetic/loopback tests. The
-[first Windows host check](docs/windows-first-probe.md) passed RDP negotiation;
-TLS stopped at an untrusted issuer. Authenticated sessions and Linux server
+[first Windows host check](docs/windows-first-probe.md) passed RDP negotiation and
+TLS 1.3 with an explicitly selected certificate pin. System trust rejected the
+issuer; the selected pin was not independently confirmed on Windows.
+Authenticated sessions and Linux server
 interoperability remain unverified. No installable distro packages have been published.
 
 See [architecture](docs/architecture.md), [roadmap](docs/roadmap.md), and
