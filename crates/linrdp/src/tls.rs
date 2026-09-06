@@ -1,4 +1,4 @@
-//! Verified TLS transport using rustls's standard certificate verifier.
+//! Verified TLS transport with standard PKI or explicit leaf-certificate trust.
 //! https://docs.rs/rustls/0.23/rustls/client/struct.ClientConfig.html
 
 use std::io::{self, Read, Write};
@@ -9,6 +9,8 @@ use std::time::Instant;
 
 use rustls::pki_types::{CertificateDer, ServerName, pem::PemObject};
 use rustls::{ClientConfig, ClientConnection, RootCertStore};
+
+pub mod pin;
 
 type Error = Box<dyn std::error::Error>;
 
@@ -45,7 +47,7 @@ fn config_with_roots(roots: RootCertStore) -> Arc<ClientConfig> {
     Arc::new(config)
 }
 
-/// The supplied hostname/IP is checked against the certificate SAN, not reverse DNS.
+/// Applies the configured trust policy: CA/SAN validation or an explicit leaf pin.
 /// The deadline covers all handshake reads and writes, including partial records.
 pub fn handshake(
     stream: &mut TcpStream,

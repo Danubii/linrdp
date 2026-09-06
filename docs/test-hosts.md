@@ -42,6 +42,13 @@ match the supplied hostname/IP and satisfy rustls's validation rules. Record a
 validation failure as a test result; do not disable certificate verification.
 See [TLS and trust](tls.md) for limitations.
 
+For an explicitly approved certificate without SANs, replace `--ca <file>` with
+`--cert-sha256 <fingerprint>`. Use the SHA-256 hash of the full DER certificate,
+not its SHA-1 thumbprint or a public-key hash. Record how the fingerprint was
+obtained and whether it was independently confirmed on the host. This mode
+checks the exact certificate, its validity and TLS handshake signatures; it
+replaces issuer-chain and name checks and does not persist trust.
+
 ## Result template
 
 Copy this into a local test note. Redact private hostnames/IPs before publishing
@@ -59,7 +66,8 @@ Local or domain test account (no password):
 Baseline client/version and connection result:
 Probe result and exit code:
 TLS result and exit code:
-Trust source (system / explicit PEM):
+Trust source (system / explicit PEM / certificate pin):
+Fingerprint provenance and independent confirmation (if pinned):
 Certificate DNS/IP match:
 Notes:
 ```

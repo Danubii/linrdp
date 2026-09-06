@@ -213,6 +213,7 @@ version = "0.1.0"
 dependencies = [
  "linrdp-proto",
  "rcgen",
+ "ring",
  "rustls",
  "rustls-native-certs",
  "x509-cert",

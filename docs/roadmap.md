@@ -11,6 +11,7 @@ All items below are planned unless explicitly marked complete.
 ## 1 — First authenticated session
 
 - [x] TLS diagnostic with certificate validation and explicit PEM trust.
+- [x] Explicit per-invocation SHA-256 certificate pinning for SAN-less hosts.
 - Graphical certificate review and persistent per-host trust handling.
 - [x] CredSSP TSRequest codec, bounded framing and peer version/status policy.
 - [x] CredSSP v5/v6 TLS binding state machine behind a provider interface.

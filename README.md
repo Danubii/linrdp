@@ -56,8 +56,15 @@ The `tls` command uses system trust roots by default. `--ca` replaces them with
 the certificates in the specified PEM file for that invocation; it does not
 modify the system trust store. Obtain this file through a trusted channel.
 The certificate must be valid for the hostname or IP you supplied and must not
-be expired. There is no certificate-verification bypass. Self-signed hosts are
-not automatically trusted; see [TLS and trust](docs/tls.md).
+be expired. Self-signed hosts are not automatically trusted.
+
+For an explicitly approved certificate without matching SANs, use
+`--cert-sha256 <fingerprint>` instead of `--ca`. The fingerprint is the SHA-256
+of the full DER leaf certificate (64 hex digits, optionally separated by colons
+or hyphens). This pins the exact certificate for this invocation, replacing
+CA/name checks while retaining validity and TLS signature verification.
+It does not save trust or automatically accept changed certificates.
+See [TLS and trust](docs/tls.md) for the trust policy.
 
 TLS 1.2 and 1.3 are enabled, with a separate five-second handshake deadline.
 Success means certificate verification and TLS completed, **not** that NLA,

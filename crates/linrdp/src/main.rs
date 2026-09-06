@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use linrdp_proto::negotiation::{PROBE_REQUEST, Response, confirm_length, decode_confirm};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
-const HELP: &str = "LinRDP — early development\n\nUsage: linrdp probe <host> [port]\n       linrdp tls <host> [port] [--ca <pem-file>]\n       linrdp --help\n       linrdp --version\n\nProbe RDP security negotiation (default port: 3389).\nUse an unbracketed IPv6 address with the port as a separate argument.\nThe tls command also verifies the server certificate and TLS handshake.\nNo credentials, login or desktop session is performed.";
+const HELP: &str = "LinRDP — early development\n\nUsage: linrdp probe <host> [port]\n       linrdp tls <host> [port] [--ca <pem-file> | --cert-sha256 <fingerprint>]\n       linrdp --help\n       linrdp --version\n\nProbe RDP security negotiation (default port: 3389).\nUse an unbracketed IPv6 address with the port as a separate argument.\nThe tls command also verifies the server certificate and TLS handshake.\nNo credentials, login or desktop session is performed.";
 
 fn main() -> ExitCode {
     match run(std::env::args().skip(1).collect()) {
@@ -33,12 +33,15 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     let host = &options.host;
     let port = options.port;
     // Validate the trust source and server name before any network access.
+    let server_name = rustls::pki_types::ServerName::try_from(host.clone())?;
     let tls_config = if options.tls {
-        Some(tls::config(options.ca_file.as_deref())?)
+        Some(match options.fingerprint {
+            Some(pin) => tls::pin::config(server_name.clone(), pin),
+            None => tls::config(options.ca_file.as_deref())?,
+        })
     } else {
         None
     };
-    let server_name = rustls::pki_types::ServerName::try_from(host.clone())?;
     // System DNS resolution is outside our TCP deadline.
     let addresses: Vec<_> = (host.as_str(), port).to_socket_addrs()?.collect();
     if addresses.is_empty() {
@@ -69,9 +72,16 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
                             .expect("completed handshake has a cipher")
                             .suite()
                     );
-                    println!(
-                        "Certificate chain, validity and hostname/IP verified; NLA/login is not implemented."
-                    );
+                    if options.fingerprint.is_some() {
+                        println!(
+                            "Explicit certificate pin, validity and TLS signature verified; CA/name validation replaced by the supplied pin."
+                        );
+                        println!("NLA/login is not implemented.");
+                    } else {
+                        println!(
+                            "Certificate chain, validity and hostname/IP verified; NLA/login is not implemented."
+                        );
+                    }
                 } else {
                     println!(
                         "Negotiation only: server identity, TLS and login have NOT been verified."
@@ -98,6 +108,7 @@ struct Options {
     host: String,
     port: u16,
     ca_file: Option<std::path::PathBuf>,
+    fingerprint: Option<tls::pin::Fingerprint>,
 }
 
 impl Options {
@@ -110,6 +121,7 @@ impl Options {
             host: args[1].clone(),
             port: 3389,
             ca_file: None,
+            fingerprint: None,
         };
         if options.host.is_empty() || options.host.starts_with('-') {
             return Err("expected a hostname or IP address".into());
@@ -128,6 +140,9 @@ impl Options {
                 if options.tls && flag == "--ca" && !path.is_empty() && !path.starts_with('-') =>
             {
                 options.ca_file = Some(path.into());
+            }
+            [flag, value] if options.tls && flag == "--cert-sha256" => {
+                options.fingerprint = Some(value.parse()?);
             }
             _ => return Err(format!("invalid arguments\n\n{HELP}").into()),
         }
@@ -243,6 +258,7 @@ mod tests {
                 host: "::1".into(),
                 port: 3390,
                 ca_file: Some("lab.pem".into()),
+                fingerprint: None,
             }
         );
     }
@@ -250,6 +266,16 @@ mod tests {
     #[test]
     fn invalid_cli_arguments_fail_before_network_access() {
         for args in [
+            vec!["probe", "localhost", "--cert-sha256", "bad"],
+            vec!["tls", "localhost", "--cert-sha256", "bad"],
+            vec![
+                "tls",
+                "localhost",
+                "--ca",
+                "lab.pem",
+                "--cert-sha256",
+                "bad",
+            ],
             vec!["connect"],
             vec!["probe"],
             vec!["probe", "localhost", "0"],
