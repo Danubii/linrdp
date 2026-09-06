@@ -66,7 +66,7 @@ pub fn handshake(
 }
 
 /// Extract the SubjectPublicKey contents, not the entire certificate or SPKI.
-fn subject_public_key(connection: &ClientConnection) -> Result<Vec<u8>, Error> {
+pub fn subject_public_key(connection: &ClientConnection) -> Result<Vec<u8>, Error> {
     use x509_cert::der::Decode;
     if connection.is_handshaking() {
         return Err("TLS verification must complete before extracting its public key".into());
@@ -85,6 +85,65 @@ fn subject_public_key(connection: &ClientConnection) -> Result<Vec<u8>, Error> {
         return Err("TLS public key is empty".into());
     }
     Ok(bytes.to_vec())
+}
+
+pub fn write_plaintext(
+    connection: &mut ClientConnection,
+    stream: &mut TcpStream,
+    bytes: &[u8],
+) -> Result<(), Error> {
+    let mut transport = DeadlineTransport {
+        stream,
+        deadline: Instant::now() + crate::TIMEOUT,
+    };
+    let mut tls = rustls::Stream::new(connection, &mut transport);
+    tls.write_all(bytes)?;
+    tls.flush()?;
+    Ok(())
+}
+
+pub fn read_message(
+    connection: &mut ClientConnection,
+    stream: &mut TcpStream,
+) -> Result<Vec<u8>, Error> {
+    let mut transport = DeadlineTransport {
+        stream,
+        deadline: Instant::now() + crate::TIMEOUT,
+    };
+    read_frame(&mut rustls::Stream::new(connection, &mut transport))
+}
+
+pub(crate) fn read_frame(input: &mut impl Read) -> Result<Vec<u8>, Error> {
+    let mut bytes = Vec::with_capacity(5);
+    let length = loop {
+        if let Some(length) = linrdp_proto::credssp::frame_length(&bytes)? {
+            break length;
+        }
+        let mut next = [0];
+        input.read_exact(&mut next)?;
+        bytes.push(next[0]);
+    };
+    let header = bytes.len();
+    bytes.resize(length, 0);
+    input.read_exact(&mut bytes[header..])?;
+    Ok(bytes)
+}
+
+pub fn read_authorization(
+    connection: &mut ClientConnection,
+    stream: &mut TcpStream,
+) -> Result<(), Error> {
+    let mut transport = DeadlineTransport {
+        stream,
+        deadline: Instant::now() + crate::TIMEOUT,
+    };
+    let mut bytes = [0; 4];
+    rustls::Stream::new(connection, &mut transport).read_exact(&mut bytes)?;
+    let status = u32::from_le_bytes(bytes);
+    if status != 0 {
+        return Err(format!("RDP early authorization denied (status {status:#010x})").into());
+    }
+    Ok(())
 }
 
 struct DeadlineTransport<'a> {
@@ -132,6 +191,21 @@ mod tests {
     use rustls::{ServerConfig, ServerConnection};
     use std::net::TcpListener;
     use std::time::Duration;
+
+    #[test]
+    fn credssp_framing_preserves_following_messages_and_rejects_truncation() {
+        let message = linrdp_proto::credssp::TsRequest::new().encode().unwrap();
+        let mut pair = message.clone();
+        pair.extend_from_slice(&message);
+        let mut input = std::io::Cursor::new(pair);
+        assert_eq!(read_frame(&mut input).unwrap(), message);
+        assert_eq!(input.position() as usize, message.len());
+        assert_eq!(read_frame(&mut input).unwrap(), message);
+        for len in 0..message.len() {
+            assert!(read_frame(&mut &message[..len]).is_err());
+        }
+        assert!(read_frame(&mut &[0x30, 0x83, 0xff, 0xff, 0xff][..]).is_err());
+    }
 
     fn attempt(
         name: &str,

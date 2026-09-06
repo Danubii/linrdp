@@ -1,3 +1,6 @@
+mod credentials;
+mod nla;
+mod ntlm;
 mod tls;
 
 use std::io::{Read, Write};
@@ -8,7 +11,21 @@ use std::time::{Duration, Instant};
 use linrdp_proto::negotiation::{PROBE_REQUEST, Response, confirm_length, decode_confirm};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
-const HELP: &str = "LinRDP — early development\n\nUsage: linrdp probe <host> [port]\n       linrdp tls <host> [port] [--ca <pem-file> | --cert-sha256 <fingerprint>]\n       linrdp --help\n       linrdp --version\n\nProbe RDP security negotiation (default port: 3389).\nUse an unbracketed IPv6 address with the port as a separate argument.\nThe tls command also verifies the server certificate and TLS handshake.\nNo credentials, login or desktop session is performed.";
+const HELP: &str = "LinRDP — early development
+
+Usage: linrdp probe <host> [port]
+       linrdp tls <host> [port] [trust-option]
+       linrdp nla-probe <host> [port] [trust-option]
+       linrdp login <host> [port] --user <username|DOMAIN\\username> [trust-option]
+       linrdp --help
+       linrdp --version
+
+Trust: --ca <pem-file> OR --cert-sha256 <fingerprint>; defaults to system trust.
+Use an unbracketed IPv6 address with the port as a separate argument.
+probe checks RDP negotiation; tls additionally verifies TLS.
+nla-probe requests an NTLM challenge without credentials.
+login prompts locally for a hidden password after TLS verification, then
+attempts NTLM CredSSP once. No graphical desktop session is implemented.";
 
 fn main() -> ExitCode {
     match run(std::env::args().skip(1).collect()) {
@@ -59,7 +76,7 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
                 let response = exchange(&mut stream)?;
                 println!("Server {address} selected {}.", response.protocol);
                 if let Some(config) = tls_config {
-                    let connection =
+                    let mut connection =
                         tls::handshake(&mut stream, server_name, config, Instant::now() + TIMEOUT)
                             .map_err(|error| format!("TLS verification failed: {error}"))?;
                     println!(
@@ -76,11 +93,19 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
                         println!(
                             "Explicit certificate pin, validity and TLS signature verified; CA/name validation replaced by the supplied pin."
                         );
-                        println!("NLA/login is not implemented.");
                     } else {
-                        println!(
-                            "Certificate chain, validity and hostname/IP verified; NLA/login is not implemented."
-                        );
+                        println!("Certificate chain, validity and hostname/IP verified.");
+                    }
+                    if options.nla {
+                        nla::run(
+                            &mut connection,
+                            &mut stream,
+                            host,
+                            response.protocol,
+                            options.user.as_deref(),
+                        )?;
+                    } else {
+                        println!("TLS diagnostic only: no NLA/login performed.");
                     }
                 } else {
                     println!(
@@ -105,6 +130,8 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
 #[derive(Debug, PartialEq, Eq)]
 struct Options {
     tls: bool,
+    nla: bool,
+    user: Option<String>,
     host: String,
     port: u16,
     ca_file: Option<std::path::PathBuf>,
@@ -113,11 +140,13 @@ struct Options {
 
 impl Options {
     fn parse(args: &[String]) -> Result<Self, Box<dyn std::error::Error>> {
-        if args.len() < 2 || !matches!(args[0].as_str(), "probe" | "tls") {
+        if args.len() < 2 || !matches!(args[0].as_str(), "probe" | "tls" | "nla-probe" | "login") {
             return Err(format!("invalid arguments\n\n{HELP}").into());
         }
         let mut options = Self {
-            tls: args[0] == "tls",
+            tls: args[0] != "probe",
+            nla: matches!(args[0].as_str(), "nla-probe" | "login"),
+            user: None,
             host: args[1].clone(),
             port: 3389,
             ca_file: None,
@@ -134,17 +163,40 @@ impl Options {
         if options.port == 0 {
             return Err("port must be between 1 and 65535".into());
         }
-        match rest {
-            [] => {}
-            [flag, path]
-                if options.tls && flag == "--ca" && !path.is_empty() && !path.starts_with('-') =>
-            {
-                options.ca_file = Some(path.into());
+        while !rest.is_empty() {
+            if rest.len() < 2 {
+                return Err(format!("invalid arguments\n\n{HELP}").into());
             }
-            [flag, value] if options.tls && flag == "--cert-sha256" => {
-                options.fingerprint = Some(value.parse()?);
+            let flag = &rest[0];
+            let value = &rest[1];
+            if value.is_empty() || value.starts_with('-') {
+                return Err("missing option value".into());
             }
-            _ => return Err(format!("invalid arguments\n\n{HELP}").into()),
+            match flag.as_str() {
+                "--user" if args[0] == "login" && options.user.is_none() => {
+                    nla::account(value)?;
+                    options.user = Some(value.clone());
+                }
+                "--ca"
+                    if options.tls
+                        && options.ca_file.is_none()
+                        && options.fingerprint.is_none() =>
+                {
+                    options.ca_file = Some(value.into())
+                }
+                "--cert-sha256"
+                    if options.tls
+                        && options.ca_file.is_none()
+                        && options.fingerprint.is_none() =>
+                {
+                    options.fingerprint = Some(value.parse()?)
+                }
+                _ => return Err(format!("invalid or duplicate option\n\n{HELP}").into()),
+            }
+            rest = &rest[2..];
+        }
+        if args[0] == "login" && options.user.is_none() {
+            return Err("login requires --user".into());
         }
         Ok(options)
     }
@@ -255,6 +307,8 @@ mod tests {
             Options::parse(&args).unwrap(),
             Options {
                 tls: true,
+                nla: false,
+                user: None,
                 host: "::1".into(),
                 port: 3390,
                 ca_file: Some("lab.pem".into()),
@@ -266,6 +320,18 @@ mod tests {
     #[test]
     fn invalid_cli_arguments_fail_before_network_access() {
         for args in [
+            vec!["login", "localhost"],
+            vec!["login", "localhost", "--user", "user@example.com"],
+            vec!["login", "localhost", "--user", "one", "--user", "two"],
+            vec![
+                "login",
+                "localhost",
+                "--user",
+                "one",
+                "--password",
+                "unused-test-value",
+            ],
+            vec!["nla-probe", "localhost", "--user", "one"],
             vec!["probe", "localhost", "--cert-sha256", "bad"],
             vec!["tls", "localhost", "--cert-sha256", "bad"],
             vec![
@@ -289,5 +355,25 @@ mod tests {
         ] {
             assert!(run(args.into_iter().map(str::to_owned).collect()).is_err());
         }
+    }
+
+    #[test]
+    fn parses_login_and_probe_with_explicit_trust() {
+        let args = [
+            "login",
+            "localhost",
+            "3390",
+            "--ca",
+            "lab.pem",
+            "--user",
+            "LAB\\tester",
+        ]
+        .map(str::to_owned);
+        let options = Options::parse(&args).unwrap();
+        assert!(options.nla && options.tls);
+        assert_eq!(options.user.as_deref(), Some("LAB\\tester"));
+        assert_eq!(options.port, 3390);
+        let options = Options::parse(&["nla-probe".into(), "localhost".into()]).unwrap();
+        assert!(options.nla && options.tls && options.user.is_none());
     }
 }

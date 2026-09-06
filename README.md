@@ -81,7 +81,24 @@ interoperability remain unverified. No installable distro packages have been pub
 See [architecture](docs/architecture.md), [roadmap](docs/roadmap.md), and
 [contributing](CONTRIBUTING.md). Licensed under [MIT](LICENSE).
 
-The [CredSSP codec and TLS binding stage](docs/credssp.md) are library building
-blocks; a real authentication provider and NLA/login integration are still pending.
-To help validate the client, follow the
+## Experimental NLA diagnostics
+
+```sh
+cargo run -p linrdp -- nla-probe my-computer.example --ca /path/to/lab-ca.pem
+cargo run -p linrdp -- login my-computer.example --user 'MACHINE\tester' --ca /path/to/lab-ca.pem
+```
+
+Use `--cert-sha256 <fingerprint>` instead of `--ca` for an explicitly approved
+certificate pin. `nla-probe` obtains an NTLM challenge without credentials.
+`login` prompts for a hidden password locally **after TLS verification**, then
+attempts NTLM CredSSP and TLS binding once. It supports bare usernames or
+`DOMAIN\username`, not UPN/Kerberos. Never put passwords in command arguments.
+
+When the server supports early authorization, the result is checked. Otherwise,
+the client reports credential delegation without claiming confirmed login.
+Both commands disconnect afterward; no desktop session is started.
+
+The full login exchange passes loopback tests using real TLS and NTLM crypto.
+Only the credential-free NLA probe has been tested against the Windows host;
+real-host login remains unverified. See [CredSSP status](docs/credssp.md) and the
 [test host guide](docs/test-hosts.md).

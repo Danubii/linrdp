@@ -1,15 +1,15 @@
 # Preparing interoperability test hosts
 
 Start with one Windows host, then add a Linux host. Keep normal RDP security
-settings enabled. The current commands check negotiation and TLS only; they
-cannot authenticate a user or display a desktop yet.
+settings enabled. Diagnostics cover negotiation, TLS and an experimental NTLM
+CredSSP login. A graphical desktop is not implemented.
 
 ## Windows
 
 Use a Windows installation that supports incoming Remote Desktop, with RDP and
 Network Level Authentication enabled. Prepare a separate non-administrator test
 account with permission to log on through Remote Desktop. Keep its password
-local; the current client has no password-entry support.
+local; `login` prompts with terminal echo disabled after TLS verification.
 
 Record the Windows edition/build, hostname/IP, RDP port and whether the test
 account is local or domain-based. Note whether an existing client can connect.
@@ -49,6 +49,18 @@ obtained and whether it was independently confirmed on the host. This mode
 checks the exact certificate, its validity and TLS handshake signatures; it
 replaces issuer-chain and name checks and does not persist trust.
 
+## NLA checks
+
+```sh
+cargo run -p linrdp -- nla-probe rdp-host.example 3389 --ca /path/to/lab-ca.pem
+cargo run -p linrdp -- login rdp-host.example 3389 --user 'MACHINE\tester' --ca /path/to/lab-ca.pem
+```
+
+The same `--cert-sha256` option is available instead of `--ca`. The probe sends
+no credentials. Login prompts locally for a password and attempts NTLM once;
+use the account password, not a Windows Hello PIN. No desktop is started.
+Record whether early authorization succeeded, failed or was unavailable.
+
 ## Result template
 
 Copy this into a local test note. Redact private hostnames/IPs before publishing
@@ -66,6 +78,8 @@ Local or domain test account (no password):
 Baseline client/version and connection result:
 Probe result and exit code:
 TLS result and exit code:
+NLA probe result and exit code:
+Login / early authorization result and exit code:
 Trust source (system / explicit PEM / certificate pin):
 Fingerprint provenance and independent confirmation (if pinned):
 Certificate DNS/IP match:

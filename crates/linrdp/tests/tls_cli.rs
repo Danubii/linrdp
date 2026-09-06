@@ -136,7 +136,7 @@ fn trust_case(pinned: bool, trusted: bool) {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(stdout.contains("TLS verified"), trusted);
     if trusted {
-        assert!(stdout.contains("NLA/login is not implemented"));
+        assert!(stdout.contains("no NLA/login performed"));
         assert_eq!(stdout.contains("Explicit certificate pin"), pinned);
         assert_eq!(stdout.contains("hostname/IP verified"), !pinned);
     } else {

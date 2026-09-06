@@ -15,7 +15,9 @@ All items below are planned unless explicitly marked complete.
 - Graphical certificate review and persistent per-host trust handling.
 - [x] CredSSP TSRequest codec, bounded framing and peer version/status policy.
 - [x] CredSSP v5/v6 TLS binding state machine behind a provider interface.
-- CredSSP/NLA authentication and TLS binding; no plaintext credential persistence.
+- [x] NTLM provider, TLS integration and hidden-password login diagnostic.
+- [x] Credential-free NLA probe against Windows.
+- Verify actual Windows account authentication and early authorization.
 - MCS/GCC connection setup, capabilities and session activation.
 - Basic bitmap output and keyboard/pointer input.
 - Demonstrate an actual Windows desktop session before calling this usable.

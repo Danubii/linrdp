@@ -1,60 +1,78 @@
 # CredSSP implementation status
 
-The protocol crate encodes/decodes TSRequest and implements the v5/v6 TLS binding
-stage behind an authentication-provider interface. This is not a working login
-client yet, and the diagnostic commands do not send these envelopes.
+The client implements an experimental NTLM CredSSP exchange over verified TLS.
+`nla-probe` stops after the server challenge; `login` attempts authentication,
+TLS binding and credential delegation once. Neither starts a desktop session.
 
-## Implemented
+## Authentication boundary
 
-- Explicit ASN.1 tags for the version, negotiation tokens, sealed credentials,
-  sealed public-key binding, server status and 32-byte client nonce.
-- DER encoding/decoding through RustCrypto's `der` library, with borrowed opaque
-  byte fields. Debug output reports presence/counts without payloads.
-- Partial-header inspection for future TLS stream framing. This reports the
-  length of one message; it does not read sockets or consume subsequent frames.
-- Strict field ordering, no duplicates/unknown fields, and no trailing data.
-- A local limit of 1 MiB per message and 16 negotiation tokens, enforced on both
-  encoding and decoding. Token decoding uses bounded storage.
-- Unsigned NTSTATUS decoding, including the ASN.1 sign-padding byte when needed.
-- A peer-policy helper that stops on any present error code and requires version
-  5 or newer, negotiating at most version 6. Older messages can be decoded for
-  diagnostics but are not accepted for authentication.
-- TLS resumption disabled in preparation for CredSSP, per MS-CSSP 3.1.5.
-- Fresh 32-byte nonces from the OS cryptographic random source and directional
-  SHA-256 binding hashes, including the required null-terminated labels.
-- A binding state machine: ready, awaiting server proof, verified, delegated,
-  failed. Every operation error makes the exchange terminal. Credentials cannot
-  reach the sealing provider through this API before the server proof verifies.
-- Constant-time comparison of the unsealed server hash. Reflected client hashes,
-  wrong keys/nonces, changed negotiated versions and unexpected fields fail.
-- Extraction of the SubjectPublicKey BIT STRING contents from the verified TLS
-  leaf certificate. The entire certificate and SPKI wrapper are not hashed.
+LinRDP owns RDP negotiation, TSRequest framing, phase validation, TLS trust,
+public-key binding, credential encoding and transport deadlines. The MIT/Apache
+licensed `sspi-rs` provider handles NTLMv2 tokens and signing/sealing. It does not
+replace LinRDP's RDP engine or CredSSP state machine.
 
-The binding stage requires a completed authentication context implementing
-`Protection`. That provider must perform real signing/sealing, verify signatures
-before releasing plaintext and enforce directional keys and sequence numbers.
-Tests use a scripted provider, which is not authentication or encryption.
-Callers must supply the verified TLS key and complete token exchange first.
-`Delegated` means an outbound message was constructed, not that login succeeded.
+This first path uses raw NTLM tokens, permitted by MS-CSSP. It does not implement
+SPNEGO negotiation, Kerberos, UPN accounts, smartcards, Entra ID, Remote Credential
+Guard or restricted-admin mode. Use `username` or `DOMAIN\username`; for an
+explicit local account use `MACHINE\username`. NTLM-disabled hosts are unsupported.
 
-## Remaining before login
+## Exchange
 
-1. SPNEGO and an authentication provider for NTLM/Kerberos token exchange.
-2. A real provider's signing/sealing implementation connected to the binding stage.
-3. Token-exchange state handling, transport deadlines and integration with the
-   existing binding state machine.
-4. Protected password entry and credential encoding/zeroization.
-5. TLS stream integration and real Windows/Linux interoperability tests.
+1. Complete TLS with the selected trust policy. Reject TLS-only negotiation
+   before collecting credentials.
+2. For `login`, prompt for a password on the local terminal with echo disabled.
+   No password argument, environment variable or saved-password file is used.
+3. Send the provider's Type 1 token in a version 6 TSRequest. It has no username,
+   password or workstation identity. Receive one Type 2 challenge, require
+   CredSSP version 5+ and signing, sealing, extended-session security, target
+   information, 128-bit security and key exchange. `nla-probe` stops here.
+4. Generate the Type 3 response and directional NTLM protection context. Send
+   the final token together with the sealed client TLS-binding hash and fresh
+   32-byte nonce. NTLM authentication data is sent at this step; it is distinct
+   from the later password-credential delegation.
+5. Require a valid server binding response, verify its NTLM signature/sequence
+   number and compare the directional SHA-256 binding hash in constant time.
+   Errors are terminal. Credentials cannot be delegated before this succeeds.
+6. Encode TSPasswordCreds inside TSCredentials with UTF-16LE fields, seal them
+   and send only authInfo. If HYBRID_EX was selected, read the four-byte early
+   authorization result. With HYBRID alone, report delegation without claiming
+   confirmed authorization. Close the connection; MCS/session setup is pending.
 
-`auth_info` and `pub_key_auth` are opaque fields, not cryptographic protection.
-Encoding them does not seal their contents or authenticate their origin. The
-wire codec does not decide which fields are legal at each exchange phase; the
-binding state machine enforces its own phase rules, and token exchange still
-needs corresponding enforcement.
+## Bounds and secrets
+
+DER decoding rejects duplicate, unordered and unknown fields. The local message
+limit is 1 MiB with at most 16 tokens, while this NTLM flow requires one challenge
+token. TLS plaintext framing reads exactly one message and preserves subsequent
+messages. Each network read/write phase has a five-second deadline. Password
+entry and local cryptographic computation are outside those deadlines. No
+application-level automatic authentication retries occur.
+
+Password/credential buffers owned by LinRDP use `Secret` or `Zeroizing`, and
+credential DER is encoded into preallocated zeroizing buffers. No diagnostic
+logging subscriber is installed: provider trace events can contain sensitive
+buffers and must not be enabled without a separate redaction review. This is
+not a guarantee that every temporary allocation inside dependencies is erased.
+
+The NTLM adapter permanently fails after sealing/unsealing errors, verifies
+integrity before returning plaintext and relies on the provider for directional
+keys and sequence numbers. Pins and certificates follow [TLS trust](tls.md).
+
+## Validation and limits
+
+Loopback tests use real TLS, real NTLM client/server contexts and synthetic
+credentials. They cover successful binding/delegation/early authorization,
+wrong passwords, altered bindings, authorization denial, message tampering,
+replay, reflection and probing without credentials. Additional wire vectors
+cover DER and Unicode credential encoding. Test fixtures are not an OS login.
+
+The Windows host answered the real NLA probe with CredSSP version 6 and an NTLM
+challenge. No real-host credentials have been sent yet; real Windows login and
+Linux interoperability remain unverified. See the [host report](windows-first-probe.md).
 
 ## References
 
 - [TSRequest, MS-CSSP 2.2.1](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-cssp/6aac4dea-08ef-47a6-8747-22ea7f6d8685)
-- [NegoData, MS-CSSP 2.2.1.1](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-cssp/9664994d-0784-4659-b85b-83b8d54c2336)
-- [Sequencing, MS-CSSP 3.1.5](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-cssp/385a7489-d46b-464c-b224-f7340e308a5c)
-- [RustCrypto DER](https://docs.rs/der/0.7.10/der/)
+- [TSPasswordCreds](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-cssp/17773cc4-21e9-4a75-a0dd-72706b174fe5)
+- [CredSSP sequencing](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-cssp/385a7489-d46b-464c-b224-f7340e308a5c)
+- [Early authorization](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpbcgr/d0e560a3-25cb-4563-8bdc-6c4cc625bbfc)
+- [sspi-rs](https://github.com/Devolutions/sspi-rs)
