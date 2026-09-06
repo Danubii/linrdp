@@ -12,7 +12,8 @@ All items below are planned unless explicitly marked complete.
 
 - [x] TLS diagnostic with certificate validation and explicit PEM trust.
 - Graphical certificate review and persistent per-host trust handling.
-- CredSSP/NLA authentication; no plaintext credential persistence.
+- [x] CredSSP TSRequest codec, bounded framing and peer version/status policy.
+- CredSSP/NLA authentication and TLS binding; no plaintext credential persistence.
 - MCS/GCC connection setup, capabilities and session activation.
 - Basic bitmap output and keyboard/pointer input.
 - Demonstrate an actual Windows desktop session before calling this usable.
@@ -37,3 +38,4 @@ All items below are planned unless explicitly marked complete.
 No real RDP host has been tested yet. Record server OS/version, client display
 system, authentication mode, resolution, codec and outcome for each future run.
 Loopback fixtures establish protocol behavior only, not server interoperability.
+Use the [test host guide](test-hosts.md) to prepare and record real host checks.
