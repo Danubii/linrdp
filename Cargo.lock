@@ -1208,6 +1208,7 @@ dependencies = [
  "der 0.7.10",
  "linrdp-proto",
  "minifb",
+ "raw-window-handle",
  "rcgen",
  "ring",
  "rpassword",

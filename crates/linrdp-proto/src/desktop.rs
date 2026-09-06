@@ -5,9 +5,11 @@ use std::fmt;
 mod bitmap;
 mod capabilities;
 mod fastpath;
+mod input;
 mod pointer;
 pub use bitmap::Framebuffer;
 pub use fastpath::frame_length;
+pub use input::Input;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error(pub String);
@@ -32,6 +34,7 @@ pub enum Phase {
 }
 
 pub struct Session {
+    held: input::Held,
     user: u16,
     channel: u16,
     share: u32,
@@ -53,6 +56,7 @@ impl Session {
             return Err(bad("invalid session channels"));
         }
         Ok(Self {
+            held: input::Held::default(),
             user,
             channel,
             share: 0,
@@ -155,6 +159,7 @@ impl Session {
                     self.server = source;
                     self.refresh_supported = demand.refresh;
                     self.framebuffer = Framebuffer::new(demand.width, demand.height)?;
+                    self.held = input::Held::default();
                     self.fragment = None;
                     self.pointer = pointer::Pointer::default();
                     self.synchronized = false;

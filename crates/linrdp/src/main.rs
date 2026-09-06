@@ -30,7 +30,7 @@ probe checks RDP negotiation; tls additionally verifies TLS.
 nla-probe requests an NTLM challenge without credentials.
 login prompts locally for a hidden password after TLS verification, then
 attempts NTLM CredSSP once. session-probe continues with MCS/GCC and channel
-setup after login, then disconnects. connect opens a read-only desktop window.";
+setup after login, then disconnects. connect opens an interactive desktop window.";
 
 fn main() -> ExitCode {
     match run(std::env::args().skip(1).collect()) {

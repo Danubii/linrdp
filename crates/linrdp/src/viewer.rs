@@ -1,17 +1,19 @@
 //! Native first-desktop viewer. Window/event handling stays on the main thread.
 use crate::{session, tls};
+mod input;
 use linrdp_proto::{
     data,
-    desktop::{Phase, Session, frame_length},
+    desktop::{Input, Phase, Session, frame_length},
     negotiation::SecurityProtocol,
 };
-use minifb::{ScaleMode, Window, WindowOptions};
+use minifb::{Window, WindowOptions};
 use std::{
     io,
     net::{Shutdown, TcpStream},
     sync::{
         Mutex,
         atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver},
     },
     time::{Duration, Instant},
 };
@@ -56,7 +58,6 @@ pub fn run(
         768,
         WindowOptions {
             resize: true,
-            scale_mode: ScaleMode::AspectRatioStretch,
             ..WindowOptions::default()
         },
     )?;
@@ -72,9 +73,19 @@ pub fn run(
     });
     let stop = AtomicBool::new(false);
     let shutdown = stream.try_clone()?;
+    let (sender, receiver) = mpsc::sync_channel::<Vec<Input>>(128);
     std::thread::scope(|scope| -> Result<(), Error> {
-        let worker = scope.spawn(|| {
-            if let Err(error) = receive(connection, stream, &mut state, &shared, &stop) {
+        let shared = &shared;
+        let stop = &stop;
+        let worker = scope.spawn(move || {
+            let result = receive(connection, stream, &mut state, shared, stop, &receiver);
+            // Release only input actually sent, including when the UI closes.
+            if let Ok(Some(packet)) = state.input(&[Input::ReleaseAll])
+                && let Ok(packet) = data::encode(&packet)
+            {
+                let _ = tls::write_plaintext(connection, stream, &packet);
+            }
+            if let Err(error) = result {
                 shared.lock().unwrap().error = Some(error.to_string());
             }
         });
@@ -84,6 +95,10 @@ pub fn run(
             let mut height = 768;
             let mut revision = 0;
             let mut shown = false;
+            let mut controller = input::Controller::attach(&mut window)?;
+            let mut rendered = Vec::new();
+            let mut rendered_size = (0, 0);
+            let mut rendered_revision = u64::MAX;
             while window.is_open() {
                 let ready;
                 {
@@ -99,12 +114,38 @@ pub fn run(
                         width = frame.width;
                         height = frame.height;
                         revision = frame.revision;
-                        window
-                            .set_title(&format!("LinRDP — {host} — {width}×{height} — View only"));
+                        window.set_title(&format!("LinRDP — {host} — {width}×{height}"));
                     }
                     ready = frame.active && revision != 0;
                 }
-                window.update_with_buffer(&pixels, width, height)?;
+                let size = window.get_size();
+                if size.0 == 0 || size.1 == 0 {
+                    window.update();
+                    let events = controller.poll(&mut window, false, (width, height))?;
+                    if !events.is_empty() {
+                        sender
+                            .try_send(events)
+                            .map_err(|_| "input queue unavailable")?;
+                    }
+                    continue;
+                }
+                if size != rendered_size || revision != rendered_revision {
+                    input::Viewport::new(size, (width, height)).render(
+                        &pixels,
+                        (width, height),
+                        size,
+                        &mut rendered,
+                    )?;
+                    rendered_size = size;
+                    rendered_revision = revision;
+                }
+                window.update_with_buffer(&rendered, size.0, size.1)?;
+                let events = controller.poll(&mut window, ready, (width, height))?;
+                if !events.is_empty() {
+                    sender.try_send(events).map_err(
+                        |_| "input queue unavailable; disconnecting to avoid lost key releases",
+                    )?;
+                }
                 if ready && !shown {
                     println!(
                         "First remote bitmap displayed: {width}x{height}. Close the window to disconnect; the remote account is not signed out."
@@ -115,8 +156,8 @@ pub fn run(
             Ok(())
         })();
         stop.store(true, Ordering::Relaxed);
-        let _ = shutdown.shutdown(Shutdown::Both);
         worker.join().map_err(|_| "desktop worker panicked")?;
+        let _ = shutdown.shutdown(Shutdown::Both);
         result
     })
 }
@@ -127,6 +168,7 @@ fn receive(
     state: &mut Session,
     shared: &Mutex<Display>,
     stop: &AtomicBool,
+    input: &Receiver<Vec<Input>>,
 ) -> Result<(), Error> {
     let mut pending = Vec::new();
     let mut bytes = [0u8; 16384];
@@ -135,6 +177,12 @@ fn receive(
     let mut deadline = Instant::now() + Duration::from_secs(30);
     let mut partial_since = None;
     while !stop.load(Ordering::Relaxed) {
+        // A bounded channel preserves input ordering without blocking the UI.
+        for events in input.try_iter().take(128) {
+            if let Some(packet) = state.input(&events)? {
+                tls::write_plaintext(connection, stream, &data::encode(&packet)?)?;
+            }
+        }
         if state.phase == Phase::Active
             && state.framebuffer.updates == 0
             && Instant::now() > deadline
@@ -184,6 +232,7 @@ fn receive(
                     if state.phase != last_phase {
                         println!("Desktop phase: {:?}.", state.phase);
                         last_phase = state.phase;
+                        shared.lock().unwrap().active = state.phase == Phase::Active;
                         deadline = Instant::now()
                             + Duration::from_secs(if state.phase == Phase::Active {
                                 90

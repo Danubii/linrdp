@@ -2,7 +2,7 @@
 
 `linrdp connect <host> [port] --user <account> [trust-option]` performs TLS,
 NTLM CredSSP, MCS/GCC, Client Info, valid-client licensing, capabilities and
-activation, then opens a native read-only display. The password is prompted
+activation, then opens a native desktop display. The password is prompted
 locally after certificate verification. Connection setup still starts from
 the terminal; there is no graphical connection form yet.
 
@@ -10,7 +10,7 @@ The initial profile requests 1024×768 at 16 bits per pixel. The decoder support
 raw bottom-up RGB565 bitmaps with row padding and interleaved RLE bitmaps, with
 and without compression headers. The server controls the negotiated dimensions
 within a bounded 16-million-pixel budget. Window resizing scales the existing
-framebuffer while preserving its aspect ratio; it does not renegotiate the remote resolution.
+framebuffer in a centered viewport while preserving its aspect ratio; it does not renegotiate the remote resolution.
 
 The client requires successful licensing, Demand Active, server synchronization,
 control cooperation/grant and Font Map before accepting bitmap output. It sends
@@ -52,12 +52,48 @@ capability negotiation and compositing are implemented in LinRDP. These
 libraries do not replace the protocol engine. Transitive dependencies may
 contain additional codecs/PDU types which this profile does not use.
 
-This first profile does not implement interactive keyboard/mouse forwarding,
-clipboard, audio, general RDS CAL license acquisition, drawing orders, bulk
+This first profile does not implement clipboard, audio, general RDS CAL license acquisition, drawing orders, bulk
 compression, graphics-pipeline codecs, dynamic resolution,
 RemoteApp or automatic reconnection. Unsupported required messages stop the
 connection explicitly. The pointer is composited when Windows supplies a
-position; the local OS pointer remains local in this read-only viewer.
+position; the local OS pointer remains visible. Cursor shape/hotspot integration
+with local input is not complete.
+
+## Basic interactive input
+
+The focused, activated session accepts keyboard scancodes, three mouse buttons,
+pointer movement and vertical wheel input through TLS-protected slow-path Input
+PDUs. Keyboard callbacks preserve press/release order, including taps completed
+between rendered frames. The UI event buffer and network input queue are bounded;
+overflow disconnects instead of silently dropping key releases. A 20 ms receive
+poll budget lets outgoing input progress while the remote desktop is static.
+This is a scheduling choice, not an end-to-end latency guarantee.
+
+Focus loss releases keys and buttons. Already-held keys/buttons are ignored on
+focus entry until released; minimizing and normal closure also release tracked
+input. Closing waits for the worker's bounded best-effort release write before
+closing the socket. Transport failure cannot guarantee delivery of releases.
+Clicks outside the centered desktop are ignored. Leaving the desktop during a
+drag releases its button at the last valid position; reentry does not click
+again until the physical button has been released.
+
+Mouse state is polled once per UI frame, so extremely short clicks can still be
+missed. Keyboard events use callbacks to avoid this limitation. The current
+US scancode mapping covers ordinary keys, modifiers, navigation, keypad and
+F1–F12. Pause, Print Screen, F13–F15, IME/Unicode text composition, layout
+selection and lock-state synchronization with the local desktop remain future
+work. Compositor shortcuts remain local where intercepted. Danish keyboards
+and X11 input have not been tested against a real host.
+
+minifb exposes different wheel units on Wayland and X11. The viewer identifies
+its actual native backend, reverses Wayland's downward-positive axis and uses
+15 axis units per wheel step; X11 already provides signed steps. Fractional
+movement accumulates into bounded RDP wheel events. Horizontal scrolling and
+extra mouse buttons are not advertised.
+
+Windows host checks verified Start-menu keyboard shortcuts, a correctly placed
+mouse click, text in Notepad and lowercase typing after losing focus while Shift
+was held. See the [input report](windows-first-probe.md#basic-interactive-input).
 
 ## Building on Linux
 

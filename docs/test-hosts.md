@@ -3,7 +3,7 @@
 Start with one Windows host, then add a Linux host. Keep normal RDP security
 settings enabled. Diagnostics cover negotiation, TLS and an experimental NTLM
 CredSSP login, plus MCS/GCC settings and channel setup. The `connect` command
-continues to a native read-only desktop; Windows first display is verified.
+continues to a native desktop with basic input; Windows first display is verified.
 
 ## Windows
 
@@ -84,7 +84,9 @@ The same certificate-pin alternative applies. Verify actual remote wallpaper,
 icons and taskbar, not just an activated connection or a black window. Leave a
 static desktop connected, resize the local window, then close and connect
 again. The current profile uses 1024×768 at 16-bit color, raw/RLE bitmaps and
-fast-path output. It does not forward keyboard or mouse input. Record the
+fast-path output. Check a harmless keyboard shortcut, text in a new scratch
+document, a mouse click after resizing and a focus change while holding Shift.
+Do not save scratch documents or publish private screen captures. Record the
 display result separately from authentication and activation.
 
 ## Result template

@@ -1,6 +1,6 @@
 # Session behavior
 
-The `connect` command currently opens one read-only remote desktop window.
+The `connect` command currently opens one remote desktop window with basic keyboard/mouse input.
 Closing that window disconnects without requesting sign-out. Other UI behavior
 described below remains planned unless explicitly marked implemented.
 The login diagnostic stops after successful early authorization. The separate
@@ -52,7 +52,7 @@ cases, rather than assuming all Linux RDP hosts have identical behavior.
    TLS, tested against Windows with the user and I/O channels.
 3. Client information, valid-client licensing, capabilities and session activation: implemented.
 4. Bitmap display in one window: implemented and visually verified against Windows.
-   Keyboard/pointer input forwarding remains planned.
+   Basic keyboard/pointer input forwarding and focus-loss releases are implemented.
 5. Disconnect/reconnect behavior against real hosts, then concurrent connections.
 
 Authentication and early authorization have passed on a Windows test host.

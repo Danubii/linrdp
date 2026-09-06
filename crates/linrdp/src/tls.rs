@@ -137,7 +137,7 @@ pub fn read_chunk(
 ) -> io::Result<usize> {
     let mut transport = DeadlineTransport {
         stream,
-        deadline: Instant::now() + std::time::Duration::from_millis(200),
+        deadline: Instant::now() + std::time::Duration::from_millis(20),
     };
     rustls::Stream::new(connection, &mut transport).read(bytes)
 }

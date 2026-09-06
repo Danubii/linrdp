@@ -19,8 +19,10 @@ or custom wire protocol belongs in this repository.
 - The desktop receiver runs on a worker thread. The main thread owns minifb's
   native window and event loop. A bounded receive buffer and one shared latest
   framebuffer prevent an unbounded queue of network packets or rendered frames.
-- Future UI work: graphical connection form, certificate review, interactive
-  keyboard/mouse forwarding and session management. The current minifb viewer
+  Ordered keyboard callbacks and a bounded UI-to-worker channel carry input;
+  rendering and mouse hit testing share one centered viewport.
+- Future UI work: graphical connection form, certificate review, international
+  keyboard/text input and session management. The current minifb viewer
   establishes first rendering on Wayland; X11 still needs real-host validation.
 
 Use established cryptography, TLS and codec libraries where appropriate;

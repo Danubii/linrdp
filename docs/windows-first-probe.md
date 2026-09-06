@@ -210,3 +210,30 @@ compatibility, interactive usability or performance/FPS guarantees. minifb's
 Wayland backend printed proxy-cleanup warnings on normal closure; exit status
 was still 0. Local checks passed 79 tests, formatting, Clippy with warnings
 denied, and a locked release build.
+
+## Basic interactive input
+
+Date: 2026-09-06. The same authenticated Windows session was tested from the
+Hyprland/Wayland client with the input implementation accompanying this report.
+The initial US keyboard profile and 1024×768 RGB565 desktop remained unchanged.
+
+| Check | Result |
+| --- | --- |
+| Ctrl+Escape / Escape | Opened and dismissed the Windows Start menu |
+| Mouse position and left click | Clicked the Start button in a centered, scaled viewport |
+| Short keyboard events | Complete `notepad` search text arrived after switching to ordered callbacks |
+| Text entry | `linrdp input test 123` appeared in a new Notepad document |
+| Focus loss with Shift held | Focus moved to another local window before Shift release; subsequent `a` arrived lowercase |
+| Normal viewer close | Exit status 0; no logoff requested |
+| Local validation | 87 tests, formatting, Clippy with warnings denied, locked release build |
+
+The first polling-only keyboard attempt missed short taps. The final keyboard
+path uses minifb callbacks and preserves both edges and their order independently
+of rendering. A bounded callback queue rejects overflow, and the network worker
+tracks sent key/button state for best-effort release on closure. Mouse buttons
+are still sampled per UI frame; very short clicks remain a limitation.
+
+Keyboard injection used temporary Wayland test tools rather than bypassing the
+client's window input path. Screenshots stayed local. Tests do not establish
+Danish-layout support, IME, all special keys, X11 input compatibility or a latency
+benchmark. See [desktop input scope](desktop.md#basic-interactive-input).
