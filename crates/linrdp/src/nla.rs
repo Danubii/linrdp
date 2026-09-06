@@ -25,7 +25,7 @@ pub fn run(
     host: &str,
     protocol: SecurityProtocol,
     user: Option<&str>,
-) -> Result<(), Error> {
+) -> Result<Option<AuthIdentity>, Error> {
     if protocol == SecurityProtocol::Tls {
         return Err("server selected TLS-only security; NLA was not negotiated".into());
     }
@@ -48,7 +48,8 @@ pub fn run(
     } else {
         None
     };
-    exchange(connection, stream, host, protocol, user, identity.as_ref())
+    exchange(connection, stream, host, protocol, user, identity.as_ref())?;
+    Ok(identity)
 }
 
 fn exchange(

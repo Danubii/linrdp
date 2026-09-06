@@ -99,7 +99,7 @@ fn initial_settings_encode_fixed_profile_and_selected_security() {
             .position(|v| v == [1, 0xc0, 216, 0])
             .unwrap();
         assert_eq!(&packet[core + 8..core + 12], &[0, 4, 0, 3]);
-        assert_eq!(&packet[core + 140..core + 146], &[16, 0, 2, 0, 0, 0]);
+        assert_eq!(&packet[core + 140..core + 146], &[16, 0, 2, 0, 5, 0]);
         assert_eq!(&packet[core + 212..core + 216], &[selected, 0, 0, 0]);
         assert_eq!(
             &packet[core + 216..],

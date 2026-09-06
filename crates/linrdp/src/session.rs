@@ -40,6 +40,14 @@ pub fn run(
     Ok(())
 }
 
+pub fn connect_channels(
+    connection: &mut rustls::ClientConnection,
+    stream: &mut TcpStream,
+    protocol: SecurityProtocol,
+) -> Result<(mcs::ServerSettings, u16), Error> {
+    setup(&mut TlsTransport { connection, stream }, protocol)
+}
+
 fn setup(
     transport: &mut impl Transport,
     protocol: SecurityProtocol,

@@ -37,7 +37,9 @@ explicit local account use `MACHINE\username`. NTLM-disabled hosts are unsupport
    and send only authInfo. If HYBRID_EX was selected, read the four-byte early
    authorization result. With HYBRID alone, report delegation without claiming
    confirmed authorization. `login` closes the connection here. `session-probe`
-   continues with [MCS/GCC settings and channel setup](mcs.md).
+   continues with [MCS/GCC settings and channel setup](mcs.md). `connect` also
+   retains the identity long enough to encode Client Info in zeroizing storage,
+   sends it under verified TLS and releases it before the display loop.
 
 ## Bounds and secrets
 
@@ -67,8 +69,9 @@ replay, reflection and probing without credentials. Additional wire vectors
 cover DER and Unicode credential encoding. Test fixtures are not an OS login.
 
 The Windows host answered the real NLA probe with CredSSP version 6 and an NTLM
-challenge. No real-host credentials have been sent yet; real Windows login and
-Linux interoperability remain unverified. See the [host report](windows-first-probe.md).
+challenge. Real Windows NTLM authentication, binding and early authorization
+have since passed with a standard test account. Linux interoperability remains
+unverified. See the [host report](windows-first-probe.md).
 
 ## References
 

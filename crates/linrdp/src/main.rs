@@ -3,6 +3,7 @@ mod nla;
 mod ntlm;
 mod session;
 mod tls;
+mod viewer;
 
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -19,6 +20,7 @@ Usage: linrdp probe <host> [port]
        linrdp nla-probe <host> [port] [trust-option]
        linrdp login <host> [port] --user <username|DOMAIN\\username> [trust-option]
        linrdp session-probe <host> [port] --user <username> [trust-option]
+       linrdp connect <host> [port] --user <username> [trust-option]
        linrdp --help
        linrdp --version
 
@@ -28,7 +30,7 @@ probe checks RDP negotiation; tls additionally verifies TLS.
 nla-probe requests an NTLM challenge without credentials.
 login prompts locally for a hidden password after TLS verification, then
 attempts NTLM CredSSP once. session-probe continues with MCS/GCC and channel
-setup after login, then disconnects. No graphical desktop session is implemented.";
+setup after login, then disconnects. connect opens a read-only desktop window.";
 
 fn main() -> ExitCode {
     match run(std::env::args().skip(1).collect()) {
@@ -100,13 +102,23 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
                         println!("Certificate chain, validity and hostname/IP verified.");
                     }
                     if options.nla {
-                        nla::run(
+                        let identity = nla::run(
                             &mut connection,
                             &mut stream,
                             host,
                             response.protocol,
                             options.user.as_deref(),
                         )?;
+                        if options.view {
+                            viewer::run(
+                                &mut connection,
+                                &mut stream,
+                                response.protocol,
+                                options.user.as_deref().ok_or("connect requires --user")?,
+                                identity.ok_or("connect requires credentials")?,
+                                host,
+                            )?;
+                        }
                         if options.session {
                             session::run(&mut connection, &mut stream, response.protocol)?;
                         }
@@ -138,6 +150,7 @@ struct Options {
     tls: bool,
     nla: bool,
     session: bool,
+    view: bool,
     user: Option<String>,
     host: String,
     port: u16,
@@ -150,15 +163,19 @@ impl Options {
         if args.len() < 2
             || !matches!(
                 args[0].as_str(),
-                "probe" | "tls" | "nla-probe" | "login" | "session-probe"
+                "probe" | "tls" | "nla-probe" | "login" | "session-probe" | "connect"
             )
         {
             return Err(format!("invalid arguments\n\n{HELP}").into());
         }
         let mut options = Self {
             tls: args[0] != "probe",
-            nla: matches!(args[0].as_str(), "nla-probe" | "login" | "session-probe"),
+            nla: matches!(
+                args[0].as_str(),
+                "nla-probe" | "login" | "session-probe" | "connect"
+            ),
             session: args[0] == "session-probe",
+            view: args[0] == "connect",
             user: None,
             host: args[1].clone(),
             port: 3389,
@@ -187,7 +204,7 @@ impl Options {
             }
             match flag.as_str() {
                 "--user"
-                    if matches!(args[0].as_str(), "login" | "session-probe")
+                    if matches!(args[0].as_str(), "login" | "session-probe" | "connect")
                         && options.user.is_none() =>
                 {
                     nla::account(value)?;
@@ -211,8 +228,10 @@ impl Options {
             }
             rest = &rest[2..];
         }
-        if matches!(args[0].as_str(), "login" | "session-probe") && options.user.is_none() {
-            return Err("login and session-probe require --user".into());
+        if matches!(args[0].as_str(), "login" | "session-probe" | "connect")
+            && options.user.is_none()
+        {
+            return Err("login, session-probe and connect require --user".into());
         }
         Ok(options)
     }
@@ -325,6 +344,7 @@ mod tests {
                 tls: true,
                 nla: false,
                 session: false,
+                view: false,
                 user: None,
                 host: "::1".into(),
                 port: 3390,

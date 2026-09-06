@@ -3,7 +3,7 @@
 A simple Linux RDP client: enter a computer address, connect, and get to work.
 Think VLC for RDP. Open source from the first commit.
 
-**Early development. No desktop sessions or graphical interface yet.**
+**Early development. Native read-only viewer implemented; first real desktop bitmap not yet verified.**
 
 We are building our own RDP engine in Rust, interoperating with existing
 Windows and Linux RDP servers. This project contains only a client.
@@ -18,6 +18,17 @@ Windows and Linux RDP servers. This project contains only a client.
 
 60 FPS is an initial performance target when the host and network permit it,
 not a compatibility claim or a guarantee. Latency and frame pacing matter too.
+
+## First-desktop viewer
+
+```sh
+cargo run --release -p linrdp -- connect my-computer.example --user 'MACHINE\tester' --ca /path/to/lab-ca.pem
+```
+
+Use the same explicit certificate-pin option as the diagnostics when appropriate.
+The initial viewer requests 1024×768 at 16-bit color. Closing its window
+disconnects without signing out. Keyboard/mouse forwarding is not implemented.
+See [desktop scope and validation](docs/desktop.md) for current limitations.
 
 ## Development
 

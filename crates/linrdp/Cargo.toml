@@ -17,6 +17,7 @@ sspi = { version = "0.21.3", default-features = false, features = ["ring"] }
 zeroize = "1"
 rpassword = "7"
 der = { version = "0.7.10", features = ["derive", "std"] }
+minifb = "0.28"
 
 [dev-dependencies]
 rcgen = "0.14"

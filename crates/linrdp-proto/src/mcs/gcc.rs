@@ -28,6 +28,7 @@ pub(super) fn request(settings: Settings, protocol: SecurityProtocol) -> Vec<u8>
     core[64..68].copy_from_slice(&12u32.to_le_bytes());
     core[132..136].copy_from_slice(&[1, 0xca, 1, 0]);
     core[140..144].copy_from_slice(&[16, 0, 2, 0]); // 16-bit color only
+    core[144] = 5; // RNS_UD_CS_SUPPORT_ERRINFO_PDU | SUPPORT_STATUSINFO_PDU
     let selected: u32 = match protocol {
         SecurityProtocol::Tls => 1,
         SecurityProtocol::CredSsp => 2,

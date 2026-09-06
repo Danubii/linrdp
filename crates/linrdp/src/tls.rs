@@ -129,6 +129,19 @@ pub(crate) fn read_frame(input: &mut impl Read) -> Result<Vec<u8>, Error> {
     Ok(bytes)
 }
 
+/// Incremental desktop read. The caller retains partial TPKT bytes across idle polls.
+pub fn read_chunk(
+    connection: &mut ClientConnection,
+    stream: &mut TcpStream,
+    bytes: &mut [u8],
+) -> io::Result<usize> {
+    let mut transport = DeadlineTransport {
+        stream,
+        deadline: Instant::now() + std::time::Duration::from_millis(200),
+    };
+    rustls::Stream::new(connection, &mut transport).read(bytes)
+}
+
 /// Read one bounded TPKT packet without consuming the next packet.
 pub fn read_data(
     connection: &mut ClientConnection,

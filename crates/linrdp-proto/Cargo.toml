@@ -9,8 +9,10 @@ publish = false
 
 [dependencies]
 der = { version = "0.7.10", features = ["derive", "std"] }
+ironrdp-graphics = "0.9"
 ring = "0.17"
 subtle = "2"
+zeroize = "1"
 
 [lints]
 workspace = true
