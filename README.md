@@ -104,3 +104,18 @@ binding and early authorization with an explicitly selected certificate pin.
 See the [Windows test report](docs/windows-first-probe.md),
 [CredSSP status](docs/credssp.md) and the
 [test host guide](docs/test-hosts.md).
+
+### Session setup diagnostic
+
+```sh
+cargo run -p linrdp -- session-probe my-computer.example --user 'MACHINE\tester' --ca /path/to/lab-ca.pem
+```
+
+This performs the same one-attempt login as `login`, then exchanges MCS/GCC
+settings and joins the user and I/O channels over TLS. An explicitly selected
+certificate pin can be used instead of `--ca`. The diagnostic requests a fixed
+1024×768 desktop with 16-bit color and no static virtual channels. It disconnects
+before client information, licensing or desktop activation; it does not display
+a desktop. This path has passed against the Windows test host.
+
+See [session behavior](docs/sessions.md) and [MCS/GCC scope](docs/mcs.md).

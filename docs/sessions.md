@@ -1,7 +1,8 @@
 # Session behavior
 
 This describes the intended client behavior, not currently available UI features.
-The current login diagnostic stops after successful early authorization.
+The login diagnostic stops after successful early authorization. The separate
+`session-probe` continues through basic settings exchange and channel setup.
 
 ## Initial experience
 
@@ -44,14 +45,16 @@ cases, rather than assuming all Linux RDP hosts have identical behavior.
 ## Implementation order and evidence
 
 1. TPKT/X.224 data framing: implemented with independent wire-vector, malformed
-   input, fragmentation and size-boundary tests. Not yet integrated into login.
-2. MCS/GCC settings exchange and channel setup over the authenticated TLS stream.
+   input, fragmentation and size-boundary tests; integrated into `session-probe`.
+2. MCS/GCC settings exchange and channel setup: implemented over authenticated
+   TLS, tested against Windows with the user and I/O channels.
 3. Client information, licensing, capabilities and session activation.
 4. Bitmap display and keyboard/pointer input in one window.
 5. Disconnect/reconnect behavior against real hosts, then concurrent connections.
 
 Authentication and early authorization have passed on a Windows test host.
-Session setup and desktop behavior remain unverified and unimplemented.
+Basic settings and channel setup have also passed on that host. Client info,
+licensing, activation and desktop behavior remain unimplemented.
 
 ## References
 

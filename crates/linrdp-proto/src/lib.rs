@@ -3,4 +3,5 @@
 pub mod binding;
 pub mod credssp;
 pub mod data;
+pub mod mcs;
 pub mod negotiation;

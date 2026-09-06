@@ -129,6 +129,29 @@ pub(crate) fn read_frame(input: &mut impl Read) -> Result<Vec<u8>, Error> {
     Ok(bytes)
 }
 
+/// Read one bounded TPKT packet without consuming the next packet.
+pub fn read_data(
+    connection: &mut ClientConnection,
+    stream: &mut TcpStream,
+) -> Result<Vec<u8>, Error> {
+    let mut transport = DeadlineTransport {
+        stream,
+        deadline: Instant::now() + crate::TIMEOUT,
+    };
+    read_data_frame(&mut rustls::Stream::new(connection, &mut transport))
+}
+
+fn read_data_frame(input: &mut impl Read) -> Result<Vec<u8>, Error> {
+    let mut header = [0; 4];
+    input.read_exact(&mut header)?;
+    let length = linrdp_proto::data::frame_length(&header)?.ok_or("incomplete TPKT header")?;
+    let mut packet = vec![0; length];
+    packet[..4].copy_from_slice(&header);
+    input.read_exact(&mut packet[4..])?;
+    linrdp_proto::data::decode(&packet)?;
+    Ok(packet)
+}
+
 pub fn read_authorization(
     connection: &mut ClientConnection,
     stream: &mut TcpStream,
@@ -191,6 +214,28 @@ mod tests {
     use rustls::{ServerConfig, ServerConnection};
     use std::net::TcpListener;
     use std::time::Duration;
+
+    #[test]
+    fn data_framing_handles_fragmentation_and_preserves_the_next_packet() {
+        struct Fragmented(std::io::Cursor<Vec<u8>>);
+        impl Read for Fragmented {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                let count = buf.len().min(1);
+                self.0.read(&mut buf[..count])
+            }
+        }
+        let packet = linrdp_proto::data::encode(&[0x2e, 0, 0, 6]).unwrap();
+        let mut input = Fragmented(std::io::Cursor::new(
+            [packet.clone(), packet.clone()].concat(),
+        ));
+        assert_eq!(read_data_frame(&mut input).unwrap(), packet);
+        assert_eq!(read_data_frame(&mut input).unwrap(), packet);
+        for end in 0..packet.len() {
+            assert!(read_data_frame(&mut &packet[..end]).is_err());
+        }
+        assert!(read_data_frame(&mut &[3, 0, 0, 6][..]).is_err());
+        assert!(read_data_frame(&mut &[3, 0, 0, 7, 2, 0xe0, 0x80][..]).is_err());
+    }
 
     #[test]
     fn credssp_framing_preserves_following_messages_and_rejects_truncation() {

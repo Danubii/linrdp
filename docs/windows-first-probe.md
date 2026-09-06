@@ -148,3 +148,28 @@ This confirms the complete authentication and early authorization path against
 this Windows test host. It does not validate MCS/GCC setup, session activation,
 graphics or input, which remain unimplemented. This was a real-host diagnostic
 run with the existing release binary; no implementation changes were required.
+
+## Successful MCS/GCC settings and channel setup
+
+Date: 2026-09-06. The `session-probe` implementation accompanying this report
+was tested once with the existing standard account and selected certificate
+pin. Private host/account identifiers and credentials are omitted.
+
+| Check | Result |
+| --- | --- |
+| TLS, CredSSP binding and early authorization | Succeeded |
+| MCS Connect Initial / GCC settings response | Accepted |
+| Server core version | `0x00080011` (wire value; not an OS build identification) |
+| MCS Attach User | User channel 1004 assigned |
+| User channel join | Confirmed for channel 1004 |
+| I/O channel join | Confirmed for channel 1003 |
+| Client exit code | 0 |
+| Requested display | 1024×768, 16-bit color; not yet rendered |
+| Desktop activation / input / graphics | Not performed |
+
+This validates basic settings exchange and the two mandatory channel joins
+against the Windows host over the authenticated TLS connection. The diagnostic
+stops before Client Info, licensing and capability exchange. No user desktop
+was activated. Pin trust remains explicitly selected and was not independently
+confirmed on Windows. Local validation passed 69 tests, Clippy, formatting and
+a release build.

@@ -19,8 +19,9 @@ All items below are planned unless explicitly marked complete.
 - [x] Credential-free NLA probe against Windows.
 - [x] Verify actual Windows NTLM account authentication and CredSSP binding.
 - [x] Verify successful early authorization with an RDP-authorized account.
-- [x] Bounded TPKT/X.224 data codec for subsequent session setup (not integrated).
-- MCS/GCC connection setup, capabilities and session activation.
+- [x] Bounded TPKT/X.224 data codec integrated into a session probe.
+- [x] MCS/GCC basic settings and user/I/O channel setup tested against Windows.
+- Client information, licensing, capabilities and session activation.
 - Basic bitmap output and keyboard/pointer input.
 - Demonstrate an actual Windows desktop session before calling this usable.
 
@@ -47,7 +48,8 @@ TLS 1.3 with an explicitly selected certificate pin, after system trust rejected
 the issuer. The pin was not independently confirmed on Windows. A standard-account
 test completed NTLM authentication and CredSSP binding. After the user granted
 RDP access, early authorization also succeeded and the client exited with code 0.
-Desktop session setup, graphics and input remain unimplemented.
+MCS/GCC settings and user/I/O channel setup also passed on this host.
+Desktop activation, graphics and input remain unimplemented.
 Record server OS/version, client display system, authentication mode, resolution,
 codec and outcome for each future run.
 Loopback fixtures establish protocol behavior only, not server interoperability.

@@ -1,6 +1,7 @@
 mod credentials;
 mod nla;
 mod ntlm;
+mod session;
 mod tls;
 
 use std::io::{Read, Write};
@@ -17,6 +18,7 @@ Usage: linrdp probe <host> [port]
        linrdp tls <host> [port] [trust-option]
        linrdp nla-probe <host> [port] [trust-option]
        linrdp login <host> [port] --user <username|DOMAIN\\username> [trust-option]
+       linrdp session-probe <host> [port] --user <username> [trust-option]
        linrdp --help
        linrdp --version
 
@@ -25,7 +27,8 @@ Use an unbracketed IPv6 address with the port as a separate argument.
 probe checks RDP negotiation; tls additionally verifies TLS.
 nla-probe requests an NTLM challenge without credentials.
 login prompts locally for a hidden password after TLS verification, then
-attempts NTLM CredSSP once. No graphical desktop session is implemented.";
+attempts NTLM CredSSP once. session-probe continues with MCS/GCC and channel
+setup after login, then disconnects. No graphical desktop session is implemented.";
 
 fn main() -> ExitCode {
     match run(std::env::args().skip(1).collect()) {
@@ -104,6 +107,9 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
                             response.protocol,
                             options.user.as_deref(),
                         )?;
+                        if options.session {
+                            session::run(&mut connection, &mut stream, response.protocol)?;
+                        }
                     } else {
                         println!("TLS diagnostic only: no NLA/login performed.");
                     }
@@ -131,6 +137,7 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
 struct Options {
     tls: bool,
     nla: bool,
+    session: bool,
     user: Option<String>,
     host: String,
     port: u16,
@@ -140,12 +147,18 @@ struct Options {
 
 impl Options {
     fn parse(args: &[String]) -> Result<Self, Box<dyn std::error::Error>> {
-        if args.len() < 2 || !matches!(args[0].as_str(), "probe" | "tls" | "nla-probe" | "login") {
+        if args.len() < 2
+            || !matches!(
+                args[0].as_str(),
+                "probe" | "tls" | "nla-probe" | "login" | "session-probe"
+            )
+        {
             return Err(format!("invalid arguments\n\n{HELP}").into());
         }
         let mut options = Self {
             tls: args[0] != "probe",
-            nla: matches!(args[0].as_str(), "nla-probe" | "login"),
+            nla: matches!(args[0].as_str(), "nla-probe" | "login" | "session-probe"),
+            session: args[0] == "session-probe",
             user: None,
             host: args[1].clone(),
             port: 3389,
@@ -173,7 +186,10 @@ impl Options {
                 return Err("missing option value".into());
             }
             match flag.as_str() {
-                "--user" if args[0] == "login" && options.user.is_none() => {
+                "--user"
+                    if matches!(args[0].as_str(), "login" | "session-probe")
+                        && options.user.is_none() =>
+                {
                     nla::account(value)?;
                     options.user = Some(value.clone());
                 }
@@ -195,8 +211,8 @@ impl Options {
             }
             rest = &rest[2..];
         }
-        if args[0] == "login" && options.user.is_none() {
-            return Err("login requires --user".into());
+        if matches!(args[0].as_str(), "login" | "session-probe") && options.user.is_none() {
+            return Err("login and session-probe require --user".into());
         }
         Ok(options)
     }
@@ -308,6 +324,7 @@ mod tests {
             Options {
                 tls: true,
                 nla: false,
+                session: false,
                 user: None,
                 host: "::1".into(),
                 port: 3390,
@@ -343,6 +360,15 @@ mod tests {
                 "bad",
             ],
             vec!["connect"],
+            vec!["session-probe", "localhost"],
+            vec![
+                "session-probe",
+                "localhost",
+                "--user",
+                "tester",
+                "--password",
+                "unused",
+            ],
             vec!["probe"],
             vec!["probe", "localhost", "0"],
             vec!["probe", "localhost", "65536"],
@@ -375,5 +401,14 @@ mod tests {
         assert_eq!(options.port, 3390);
         let options = Options::parse(&["nla-probe".into(), "localhost".into()]).unwrap();
         assert!(options.nla && options.tls && options.user.is_none());
+        let options = Options::parse(&[
+            "session-probe".into(),
+            "localhost".into(),
+            "--user".into(),
+            "tester".into(),
+        ])
+        .unwrap();
+        assert!(options.session && options.nla && options.tls);
+        assert_eq!(options.user.as_deref(), Some("tester"));
     }
 }
