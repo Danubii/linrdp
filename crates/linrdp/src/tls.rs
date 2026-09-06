@@ -58,7 +58,31 @@ pub fn handshake(
     while connection.is_handshaking() {
         connection.complete_io(&mut transport)?;
     }
+    // Check that the verified leaf key can be used for future CredSSP binding.
+    subject_public_key(&connection)?;
     Ok(connection)
+}
+
+/// Extract the SubjectPublicKey contents, not the entire certificate or SPKI.
+fn subject_public_key(connection: &ClientConnection) -> Result<Vec<u8>, Error> {
+    use x509_cert::der::Decode;
+    if connection.is_handshaking() {
+        return Err("TLS verification must complete before extracting its public key".into());
+    }
+    let leaf = connection
+        .peer_certificates()
+        .and_then(|chain| chain.first())
+        .ok_or("TLS peer did not provide a certificate")?;
+    let certificate = x509_cert::Certificate::from_der(leaf.as_ref())?;
+    let key = certificate
+        .tbs_certificate
+        .subject_public_key_info
+        .subject_public_key;
+    let bytes = key.as_bytes().ok_or("TLS public key is not byte-aligned")?;
+    if bytes.is_empty() {
+        return Err("TLS public key is empty".into());
+    }
+    Ok(bytes.to_vec())
 }
 
 struct DeadlineTransport<'a> {
@@ -162,6 +186,12 @@ mod tests {
         );
         drop(client);
         server.join().unwrap();
+        if let Ok(connection) = &result {
+            assert_eq!(
+                subject_public_key(connection).unwrap(),
+                key.public_key_raw()
+            );
+        }
         result
     }
 

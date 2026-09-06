@@ -71,6 +71,7 @@ have been published.
 See [architecture](docs/architecture.md), [roadmap](docs/roadmap.md), and
 [contributing](CONTRIBUTING.md). Licensed under [MIT](LICENSE).
 
-The [CredSSP envelope codec](docs/credssp.md) is implemented as a library building
-block; NLA/login is still pending. To help validate the client, follow the
+The [CredSSP codec and TLS binding stage](docs/credssp.md) are library building
+blocks; a real authentication provider and NLA/login integration are still pending.
+To help validate the client, follow the
 [test host guide](docs/test-hosts.md).
