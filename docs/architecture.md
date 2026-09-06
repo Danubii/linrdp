@@ -9,7 +9,8 @@ or custom wire protocol belongs in this repository.
 ## Boundaries
 
 - `linrdp-proto`: wire encoding and decoding, independent of UI and networking.
-- `linrdp`: the development executable; initially a protocol diagnostic tool.
+- `linrdp`: the development executable, including negotiation and verified TLS
+  diagnostics. Its TLS module wraps rustls; see [TLS and trust](tls.md).
 - Future session layer: transport, TLS, CredSSP, connection state and channels.
 - Future native UI: connection form, credentials, session rendering and input.
 

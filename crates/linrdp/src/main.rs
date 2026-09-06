@@ -1,3 +1,5 @@
+mod tls;
+
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::process::ExitCode;
@@ -6,7 +8,7 @@ use std::time::{Duration, Instant};
 use linrdp_proto::negotiation::{PROBE_REQUEST, Response, confirm_length, decode_confirm};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
-const HELP: &str = "LinRDP — early development\n\nUsage: linrdp probe <host> [port]\n       linrdp --help\n       linrdp --version\n\nProbe RDP security negotiation (default port: 3389).\nUse an unbracketed IPv6 address with the port as a separate argument.\nNo TLS handshake, credentials, login or desktop session is performed.";
+const HELP: &str = "LinRDP — early development\n\nUsage: linrdp probe <host> [port]\n       linrdp tls <host> [port] [--ca <pem-file>]\n       linrdp --help\n       linrdp --version\n\nProbe RDP security negotiation (default port: 3389).\nUse an unbracketed IPv6 address with the port as a separate argument.\nThe tls command also verifies the server certificate and TLS handshake.\nNo credentials, login or desktop session is performed.";
 
 fn main() -> ExitCode {
     match run(std::env::args().skip(1).collect()) {
@@ -27,21 +29,16 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
         println!("linrdp {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
-    if args[0] != "probe" || !(2..=3).contains(&args.len()) {
-        return Err(format!("invalid arguments\n\n{HELP}").into());
-    }
-    let host = &args[1];
-    if host.is_empty() || host.starts_with('-') {
-        return Err("expected a hostname or IP address".into());
-    }
-    let port = args
-        .get(2)
-        .map(|value| value.parse::<u16>())
-        .transpose()?
-        .unwrap_or(3389);
-    if port == 0 {
-        return Err("port must be between 1 and 65535".into());
-    }
+    let options = Options::parse(&args)?;
+    let host = &options.host;
+    let port = options.port;
+    // Validate the trust source and server name before any network access.
+    let tls_config = if options.tls {
+        Some(tls::config(options.ca_file.as_deref())?)
+    } else {
+        None
+    };
+    let server_name = rustls::pki_types::ServerName::try_from(host.clone())?;
     // System DNS resolution is outside our TCP deadline.
     let addresses: Vec<_> = (host.as_str(), port).to_socket_addrs()?.collect();
     if addresses.is_empty() {
@@ -58,9 +55,28 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
             Ok(mut stream) => {
                 let response = exchange(&mut stream)?;
                 println!("Server {address} selected {}.", response.protocol);
-                println!(
-                    "Negotiation only: server identity, TLS and login have NOT been verified."
-                );
+                if let Some(config) = tls_config {
+                    let connection =
+                        tls::handshake(&mut stream, server_name, config, Instant::now() + TIMEOUT)
+                            .map_err(|error| format!("TLS verification failed: {error}"))?;
+                    println!(
+                        "TLS verified for {host}: {:?}, {:?}.",
+                        connection
+                            .protocol_version()
+                            .expect("completed handshake has a version"),
+                        connection
+                            .negotiated_cipher_suite()
+                            .expect("completed handshake has a cipher")
+                            .suite()
+                    );
+                    println!(
+                        "Certificate chain, validity and hostname/IP verified; NLA/login is not implemented."
+                    );
+                } else {
+                    println!(
+                        "Negotiation only: server identity, TLS and login have NOT been verified."
+                    );
+                }
                 return Ok(());
             }
             Err(error) => last_error = Some(error),
@@ -74,6 +90,49 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
         )
     )
     .into())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct Options {
+    tls: bool,
+    host: String,
+    port: u16,
+    ca_file: Option<std::path::PathBuf>,
+}
+
+impl Options {
+    fn parse(args: &[String]) -> Result<Self, Box<dyn std::error::Error>> {
+        if args.len() < 2 || !matches!(args[0].as_str(), "probe" | "tls") {
+            return Err(format!("invalid arguments\n\n{HELP}").into());
+        }
+        let mut options = Self {
+            tls: args[0] == "tls",
+            host: args[1].clone(),
+            port: 3389,
+            ca_file: None,
+        };
+        if options.host.is_empty() || options.host.starts_with('-') {
+            return Err("expected a hostname or IP address".into());
+        }
+        let mut rest = &args[2..];
+        if let Some(value) = rest.first().filter(|value| !value.starts_with('-')) {
+            options.port = value.parse()?;
+            rest = &rest[1..];
+        }
+        if options.port == 0 {
+            return Err("port must be between 1 and 65535".into());
+        }
+        match rest {
+            [] => {}
+            [flag, path]
+                if options.tls && flag == "--ca" && !path.is_empty() && !path.starts_with('-') =>
+            {
+                options.ca_file = Some(path.into());
+            }
+            _ => return Err(format!("invalid arguments\n\n{HELP}").into()),
+        }
+        Ok(options)
+    }
 }
 
 fn exchange(stream: &mut TcpStream) -> Result<Response, Box<dyn std::error::Error>> {
@@ -175,6 +234,20 @@ mod tests {
     }
 
     #[test]
+    fn parses_tls_with_explicit_trust_and_ipv6() {
+        let args = ["tls", "::1", "3390", "--ca", "lab.pem"].map(str::to_owned);
+        assert_eq!(
+            Options::parse(&args).unwrap(),
+            Options {
+                tls: true,
+                host: "::1".into(),
+                port: 3390,
+                ca_file: Some("lab.pem".into()),
+            }
+        );
+    }
+
+    #[test]
     fn invalid_cli_arguments_fail_before_network_access() {
         for args in [
             vec!["connect"],
@@ -182,6 +255,11 @@ mod tests {
             vec!["probe", "localhost", "0"],
             vec!["probe", "localhost", "65536"],
             vec!["probe", "--password"],
+            vec!["probe", "localhost", "--ca", "lab.pem"],
+            vec!["tls", "localhost", "--ca"],
+            vec!["tls", "localhost", "--insecure"],
+            vec!["tls", "localhost", "--ca", "--insecure"],
+            vec!["tls", "localhost", "3389", "unexpected"],
         ] {
             assert!(run(args.into_iter().map(str::to_owned).collect()).is_err());
         }

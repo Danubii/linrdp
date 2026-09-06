@@ -10,7 +10,8 @@ All items below are planned unless explicitly marked complete.
 
 ## 1 — First authenticated session
 
-- TLS with certificate validation and explicit trust handling.
+- [x] TLS diagnostic with certificate validation and explicit PEM trust.
+- Graphical certificate review and persistent per-host trust handling.
 - CredSSP/NLA authentication; no plaintext credential persistence.
 - MCS/GCC connection setup, capabilities and session activation.
 - Basic bitmap output and keyboard/pointer input.
