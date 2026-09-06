@@ -30,5 +30,24 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
+The first development tool performs the initial RDP security negotiation:
+
+```sh
+cargo run -p linrdp -- probe 192.0.2.10
+cargo run -p linrdp -- probe my-computer.example 3389
+cargo run -p linrdp -- probe ::1 3389
+```
+
+Replace the example address with your RDP host. This sends one negotiation
+request and reports the server's chosen security mode, then disconnects.
+It does **not** establish TLS, authenticate the server, send credentials or
+display a desktop. Legacy RDP security is rejected. TCP connection attempts
+share a five-second budget; reading the response has a separate five-second
+deadline. System DNS resolution is outside these deadlines.
+
+The codec and transport have synthetic/loopback tests. Real Windows and Linux
+server interoperability is not yet verified. No installable distro packages
+have been published.
+
 See [architecture](docs/architecture.md), [roadmap](docs/roadmap.md), and
 [contributing](CONTRIBUTING.md). Licensed under [MIT](LICENSE).

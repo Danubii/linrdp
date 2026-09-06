@@ -4,9 +4,9 @@ All items below are planned unless explicitly marked complete.
 
 ## 0 — Foundation
 
-- Public repository, MIT license, Rust workspace and CI.
-- TPKT/X.224 security negotiation codec and diagnostic command.
-- Malformed input tests and local transport tests.
+- [x] Public repository, MIT license, Rust workspace and CI.
+- [x] TPKT/X.224 security negotiation codec and diagnostic command.
+- [x] Malformed input tests and local transport tests.
 
 ## 1 — First authenticated session
 
