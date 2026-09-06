@@ -64,9 +64,10 @@ Success means certificate verification and TLS completed, **not** that NLA,
 user authentication or a desktop session succeeded. The command disconnects
 after the handshake and never sends credentials.
 
-The codec and transport have synthetic/loopback tests. Real Windows and Linux
-server interoperability is not yet verified. No installable distro packages
-have been published.
+The codec and transport have synthetic/loopback tests. The
+[first Windows host check](docs/windows-first-probe.md) passed RDP negotiation;
+TLS stopped at an untrusted issuer. Authenticated sessions and Linux server
+interoperability remain unverified. No installable distro packages have been published.
 
 See [architecture](docs/architecture.md), [roadmap](docs/roadmap.md), and
 [contributing](CONTRIBUTING.md). Licensed under [MIT](LICENSE).

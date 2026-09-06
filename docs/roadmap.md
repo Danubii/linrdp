@@ -36,7 +36,9 @@ All items below are planned unless explicitly marked complete.
 
 ## Compatibility evidence
 
-No real RDP host has been tested yet. Record server OS/version, client display
-system, authentication mode, resolution, codec and outcome for each future run.
+The [first Windows host check](windows-first-probe.md) passed RDP negotiation;
+TLS stopped with `UnknownIssuer`. No authenticated session has been tested.
+Record server OS/version, client display system, authentication mode, resolution,
+codec and outcome for each future run.
 Loopback fixtures establish protocol behavior only, not server interoperability.
 Use the [test host guide](test-hosts.md) to prepare and record real host checks.

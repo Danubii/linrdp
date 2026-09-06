@@ -48,7 +48,9 @@ PEM trust and verify failure exit codes. Fixture keys exist only in memory;
 temporary files contain public certificates and are removed after tests.
 
 These fixtures are not evidence of Windows, xrdp or GNOME interoperability.
-Real host testing remains outstanding.
+The [first Windows host check](windows-first-probe.md) passed negotiation and
+stopped during TLS verification with `UnknownIssuer`. A successful verified TLS
+handshake against a real RDP host remains outstanding.
 
 ## References
 
