@@ -19,6 +19,7 @@ All items below are planned unless explicitly marked complete.
 - [x] Credential-free NLA probe against Windows.
 - [x] Verify actual Windows NTLM account authentication and CredSSP binding.
 - [x] Verify successful early authorization with an RDP-authorized account.
+- [x] Bounded TPKT/X.224 data codec for subsequent session setup (not integrated).
 - MCS/GCC connection setup, capabilities and session activation.
 - Basic bitmap output and keyboard/pointer input.
 - Demonstrate an actual Windows desktop session before calling this usable.
@@ -27,6 +28,7 @@ All items below are planned unless explicitly marked complete.
 
 - Native connection window: address, connect, credentials.
 - Session window, resize, fullscreen and useful connection errors.
+- Disconnect/reconnect and concurrent connections; see [session design](sessions.md).
 - Validate against Windows RDP, xrdp and GNOME Remote Desktop.
 - Test Danish/US keyboards, Wayland/X11, scaling and network interruption.
 
