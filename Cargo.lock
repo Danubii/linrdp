@@ -1301,8 +1301,6 @@ dependencies = [
 [[package]]
 name = "minifb"
 version = "0.28.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1a093126f2ed9012fc0b146934c97eb0273e54983680a8bf5309b6b4a365b32"
 dependencies = [
  "cc",
  "console_error_panic_hook",

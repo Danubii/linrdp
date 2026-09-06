@@ -2,3 +2,5 @@
 *.rdp
 .env
 .env.*
+
+/vendor/minifb/target/

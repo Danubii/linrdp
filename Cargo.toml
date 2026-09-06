@@ -1,6 +1,7 @@
 [workspace]
 members = ["crates/linrdp-proto", "crates/linrdp"]
 resolver = "3"
+exclude = ["vendor/minifb"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,3 +11,6 @@ repository = "https://github.com/Danubii/linrdp"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+
+[patch.crates-io]
+minifb = { path = "vendor/minifb" }
