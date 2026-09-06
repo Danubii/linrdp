@@ -8,15 +8,21 @@ or custom wire protocol belongs in this repository.
 
 ## Boundaries
 
-- `linrdp-proto`: wire encoding and decoding, independent of UI and networking.
-- `linrdp`: the development executable, including negotiation and verified TLS
-  diagnostics and the experimental NTLM login flow. TLS uses rustls and NTLM
-  uses sspi-rs; LinRDP owns CredSSP framing, state and binding. See
-  [TLS and trust](tls.md) and [CredSSP status](credssp.md).
-- Future session layer: transport, TLS, CredSSP, connection state and channels.
-- Future native UI: connection form, credentials, session rendering and input.
+- `linrdp-proto`: wire encoding/decoding, CredSSP state, MCS/GCC setup,
+  desktop activation, bounded bitmap decoding and pointer compositing. It is
+  independent of UI and networking. IronRDP graphics supplies interleaved RLE
+  decompression; LinRDP owns the session protocol and capability negotiation.
+- `linrdp`: diagnostics and the `connect` executable, verified rustls transport,
+  sspi-rs NTLM authentication, hidden credential prompting, and native display.
+  See [TLS and trust](tls.md), [CredSSP status](credssp.md) and
+  [desktop scope](desktop.md).
+- The desktop receiver runs on a worker thread. The main thread owns minifb's
+  native window and event loop. A bounded receive buffer and one shared latest
+  framebuffer prevent an unbounded queue of network packets or rendered frames.
+- Future UI work: graphical connection form, certificate review, interactive
+  keyboard/mouse forwarding and session management. The current minifb viewer
+  establishes first rendering on Wayland; X11 still needs real-host validation.
 
-Select a UI toolkit after a rendering/input spike on Wayland and X11.
 Use established cryptography, TLS and codec libraries where appropriate;
 an original RDP engine does not mean inventing cryptography or video codecs.
 
@@ -26,8 +32,8 @@ Treat remote bytes as untrusted. Bound allocations, validate lengths before
 indexing, and return errors for unsupported messages. Keep parsers testable
 without a network. Avoid unsafe code in project crates.
 
-Before implementing authenticated sessions, establish certificate validation
-and a deliberate trust flow. Do not silently downgrade security, log secrets,
+Authenticated sessions require certificate validation and an explicit trust
+policy. Do not silently downgrade security, log secrets,
 or put passwords in process arguments. Credential storage must be opt-in and
 use the desktop's secret service.
 
