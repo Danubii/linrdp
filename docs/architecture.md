@@ -9,7 +9,8 @@ or custom wire protocol belongs in this repository.
 ## Boundaries
 
 - `linrdp-proto`: wire encoding/decoding, CredSSP state, MCS/GCC setup,
-  desktop activation, bounded bitmap decoding and pointer compositing. It is
+  desktop activation, bounded bitmap decoding, pointer compositing and CLIPRDR
+  wire formats and static-channel fragmentation. It is
   independent of UI and networking. IronRDP graphics supplies interleaved RLE
   decompression; LinRDP owns the session protocol and capability negotiation.
 - `linrdp`: diagnostics and the `connect` executable, verified rustls transport,
@@ -21,6 +22,11 @@ or custom wire protocol belongs in this repository.
   framebuffer prevent an unbounded queue of network packets or rendered frames.
   Ordered keyboard callbacks and a bounded UI-to-worker channel carry input;
   rendering and mouse hit testing share one centered viewport.
+- Clipboard ownership runs on a separate Wayland worker using wl-clipboard-rs.
+  The session worker negotiates formats and file streams; bounded queues connect
+  it to native ownership. File reads use capability-rooted traversal; downloads
+  stay in private temporary directories until native file-manager paste. See
+  [clipboard behavior](clipboard.md).
 - Future UI work: graphical connection form, certificate review, international
   keyboard/text input and session management. The current minifb viewer
   establishes first rendering on Wayland; X11 still needs real-host validation.

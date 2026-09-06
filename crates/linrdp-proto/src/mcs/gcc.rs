@@ -35,9 +35,15 @@ pub(super) fn request(settings: Settings, protocol: SecurityProtocol) -> Vec<u8>
         SecurityProtocol::CredSspEarlyAuth => 8,
     };
     core[212..216].copy_from_slice(&selected.to_le_bytes());
-    // TLS provides encryption; zero legacy encryption methods. No static channels.
+    // TLS provides encryption; zero legacy encryption methods.
     core.extend_from_slice(&[2, 0xc0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-    core.extend_from_slice(&[3, 0xc0, 8, 0, 0, 0, 0, 0]);
+    if settings.clipboard {
+        core.extend_from_slice(&[3, 0xc0, 20, 0, 1, 0, 0, 0]);
+        core.extend_from_slice(b"cliprdr\0");
+        core.extend_from_slice(&0xc0000000u32.to_le_bytes()); // initialized, encrypt under legacy security
+    } else {
+        core.extend_from_slice(&[3, 0xc0, 8, 0, 0, 0, 0, 0]);
+    }
     let mut conference = vec![0, 8, 0, 0x10, 0, 1, 0xc0, 0];
     conference.extend_from_slice(b"Duca");
     per_length(&mut conference, core.len());
@@ -73,6 +79,7 @@ fn server_blocks(bytes: &[u8], requested: u32) -> Result<ServerSettings, Error> 
     let mut core = None;
     let mut security = false;
     let mut network = None;
+    let mut clipboard_channel = None;
     while !r.0.is_empty() {
         let kind = r.le16()?;
         let length = usize::from(r.le16()?)
@@ -106,12 +113,21 @@ fn server_blocks(bytes: &[u8], requested: u32) -> Result<ServerSettings, Error> 
                 security = true;
             }
             0x0c03 => {
-                if network.is_some() || length != 4 {
+                if network.is_some() || ![4, 8].contains(&length) {
                     return Err(Error("invalid or duplicate server network data"));
                 }
                 let channel = block.le16()?;
-                if channel < 1001 || block.le16()? != 0 {
-                    return Err(Error("invalid I/O channel or unrequested static channels"));
+                let count = block.le16()?;
+                if channel < 1001 || count > 1 || length != if count == 0 { 4 } else { 8 } {
+                    return Err(Error("invalid server channel assignment"));
+                }
+                if count == 1 {
+                    let clip = block.le16()?;
+                    if clip < 1001 || clip == channel {
+                        return Err(Error("invalid clipboard channel"));
+                    }
+                    clipboard_channel = Some(clip);
+                    block.le16()?; // odd channel count padding
                 }
                 network = Some(channel);
             }
@@ -127,5 +143,6 @@ fn server_blocks(bytes: &[u8], requested: u32) -> Result<ServerSettings, Error> 
         version,
         early_capability_flags,
         io_channel: network.ok_or(Error("missing server network"))?,
+        clipboard_channel,
     })
 }

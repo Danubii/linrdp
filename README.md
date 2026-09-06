@@ -3,7 +3,7 @@
 A simple Linux RDP client: enter a computer address, connect, and get to work.
 Think VLC for RDP. Open source from the first commit.
 
-**Early development. Windows desktop display, basic keyboard input and mouse clicks verified.**
+**Early development. Windows desktop, basic input and bidirectional clipboard file copying verified.**
 
 We are building our own RDP engine in Rust, interoperating with existing
 Windows and Linux RDP servers. This project contains only a client.
@@ -26,11 +26,15 @@ cargo run --release -p linrdp -- connect my-computer.example --user 'MACHINE\tes
 ```
 
 Use the same explicit certificate-pin option as the diagnostics when appropriate.
-The initial viewer requests 1024×768 at 16-bit color. Closing its window
+Use `--size 1920x1080` to select the initial resolution (default 1024×768,
+16-bit color). Window resizing scales the view; dynamic resolution is not yet
+implemented. Closing its window
 disconnects without signing out. Basic keyboard, three mouse buttons and vertical
 scrolling are implemented. Input goes to the focused session window.
 The initial keyboard profile is US; Danish layouts and IME are not yet validated.
-See [desktop scope and validation](docs/desktop.md) for current limitations.
+Wayland text and file copy/paste are enabled by default; use `--clipboard off`
+to disable sharing. See [clipboard behavior and limits](docs/clipboard.md) and
+[desktop scope and validation](docs/desktop.md).
 
 ## Development
 

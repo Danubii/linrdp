@@ -1,3 +1,4 @@
+mod clipboard;
 mod credentials;
 mod nla;
 mod ntlm;
@@ -20,7 +21,7 @@ Usage: linrdp probe <host> [port]
        linrdp nla-probe <host> [port] [trust-option]
        linrdp login <host> [port] --user <username|DOMAIN\\username> [trust-option]
        linrdp session-probe <host> [port] --user <username> [trust-option]
-       linrdp connect <host> [port] --user <username> [trust-option]
+       linrdp connect <host> [port] --user <username> [trust-option] [--size WIDTHxHEIGHT] [--clipboard on|off]
        linrdp --help
        linrdp --version
 
@@ -30,7 +31,8 @@ probe checks RDP negotiation; tls additionally verifies TLS.
 nla-probe requests an NTLM challenge without credentials.
 login prompts locally for a hidden password after TLS verification, then
 attempts NTLM CredSSP once. session-probe continues with MCS/GCC and channel
-setup after login, then disconnects. connect opens an interactive desktop window.";
+setup after login, then disconnects. connect opens an interactive desktop window.
+connect defaults to 1024x768 and clipboard on (Wayland text and file copy/paste).";
 
 fn main() -> ExitCode {
     match run(std::env::args().skip(1).collect()) {
@@ -117,6 +119,12 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
                                 options.user.as_deref().ok_or("connect requires --user")?,
                                 identity.ok_or("connect requires credentials")?,
                                 host,
+                                linrdp_proto::mcs::Settings {
+                                    width: options.size.unwrap_or((1024, 768)).0,
+                                    height: options.size.unwrap_or((1024, 768)).1,
+                                    clipboard: options.clipboard,
+                                    ..Default::default()
+                                },
                             )?;
                         }
                         if options.session {
@@ -151,6 +159,8 @@ struct Options {
     nla: bool,
     session: bool,
     view: bool,
+    size: Option<(u16, u16)>,
+    clipboard: bool,
     user: Option<String>,
     host: String,
     port: u16,
@@ -176,6 +186,8 @@ impl Options {
             ),
             session: args[0] == "session-probe",
             view: args[0] == "connect",
+            size: None,
+            clipboard: args[0] == "connect",
             user: None,
             host: args[1].clone(),
             port: 3389,
@@ -193,6 +205,7 @@ impl Options {
         if options.port == 0 {
             return Err("port must be between 1 and 65535".into());
         }
+        let mut clipboard_set = false;
         while !rest.is_empty() {
             if rest.len() < 2 {
                 return Err(format!("invalid arguments\n\n{HELP}").into());
@@ -203,6 +216,25 @@ impl Options {
                 return Err("missing option value".into());
             }
             match flag.as_str() {
+                "--size" if options.view && options.size.is_none() => {
+                    let (w, h) = value.split_once('x').ok_or("use --size WIDTHxHEIGHT")?;
+                    let (w, h): (u16, u16) = (w.parse()?, h.parse()?);
+                    if !(200..=8192).contains(&w)
+                        || !(200..=8192).contains(&h)
+                        || u32::from(w) * u32::from(h) > 16_777_216
+                    {
+                        return Err("resolution outside supported limits".into());
+                    }
+                    options.size = Some((w, h));
+                }
+                "--clipboard" if options.view && !clipboard_set => {
+                    options.clipboard = match value.as_str() {
+                        "on" => true,
+                        "off" => false,
+                        _ => return Err("clipboard must be on or off".into()),
+                    };
+                    clipboard_set = true;
+                }
                 "--user"
                     if matches!(args[0].as_str(), "login" | "session-probe" | "connect")
                         && options.user.is_none() =>
@@ -345,6 +377,8 @@ mod tests {
                 nla: false,
                 session: false,
                 view: false,
+                size: None,
+                clipboard: false,
                 user: None,
                 host: "::1".into(),
                 port: 3390,
@@ -430,5 +464,30 @@ mod tests {
         .unwrap();
         assert!(options.session && options.nla && options.tls);
         assert_eq!(options.user.as_deref(), Some("tester"));
+    }
+    #[test]
+    fn desktop_size_and_clipboard_options_are_bounded() {
+        let parse = |extra: &[&str]| {
+            let mut args = vec!["connect", "localhost", "--user", "tester"];
+            args.extend(extra);
+            Options::parse(&args.into_iter().map(str::to_owned).collect::<Vec<_>>())
+        };
+        let options = parse(&["--size", "1920x1080", "--clipboard", "off"]).unwrap();
+        assert_eq!(options.size, Some((1920, 1080)));
+        assert!(!options.clipboard);
+        assert!(parse(&[]).unwrap().clipboard);
+        for size in [
+            "0x768",
+            "199x768",
+            "8193x768",
+            "8192x8192",
+            "1920",
+            "1920x1080x1",
+            "-1x768",
+        ] {
+            assert!(parse(&["--size", size]).is_err());
+        }
+        assert!(parse(&["--clipboard", "yes"]).is_err());
+        assert!(parse(&["--clipboard", "on", "--clipboard", "off"]).is_err());
     }
 }

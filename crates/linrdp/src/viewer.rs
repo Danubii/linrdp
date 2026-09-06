@@ -36,9 +36,14 @@ pub fn run(
     account: &str,
     identity: sspi::AuthIdentity,
     host: &str,
+    settings: linrdp_proto::mcs::Settings,
 ) -> Result<(), Error> {
-    let (server, user) = session::connect_channels(connection, stream, protocol)?;
+    let (server, user) = session::connect_channels(connection, stream, protocol, settings)?;
     let mut state = Session::new(user, server.io_channel)?;
+    let mut clipboard = server
+        .clipboard_channel
+        .map(|channel| crate::clipboard::Clipboard::new(user, channel));
+    let clipboard_focus = clipboard.as_ref().map(|c| c.focused());
     let (domain, username) = crate::nla::account(account)?;
     let info = state.client_info(
         domain,
@@ -52,10 +57,12 @@ pub fn run(
     drop(info);
     drop(identity);
     println!("Client Info sent; waiting for licensing and desktop activation.");
+    let (initial_width, initial_height) =
+        (usize::from(settings.width), usize::from(settings.height));
     let mut window = Window::new(
         "LinRDP — Connecting",
-        1024,
-        768,
+        initial_width,
+        initial_height,
         WindowOptions {
             resize: true,
             ..WindowOptions::default()
@@ -63,9 +70,9 @@ pub fn run(
     )?;
     window.set_target_fps(60);
     let shared = Mutex::new(Display {
-        width: 1024,
-        height: 768,
-        pixels: vec![0; 1024 * 768],
+        width: initial_width,
+        height: initial_height,
+        pixels: vec![0; initial_width * initial_height],
         revision: 0,
         active: false,
         error: None,
@@ -78,7 +85,15 @@ pub fn run(
         let shared = &shared;
         let stop = &stop;
         let worker = scope.spawn(move || {
-            let result = receive(connection, stream, &mut state, shared, stop, &receiver);
+            let result = receive(
+                connection,
+                stream,
+                &mut state,
+                shared,
+                stop,
+                &receiver,
+                &mut clipboard,
+            );
             // Release only input actually sent, including when the UI closes.
             if let Ok(Some(packet)) = state.input(&[Input::ReleaseAll])
                 && let Ok(packet) = data::encode(&packet)
@@ -90,9 +105,9 @@ pub fn run(
             }
         });
         let result = (|| -> Result<(), Error> {
-            let mut pixels = vec![0; 1024 * 768];
-            let mut width = 1024;
-            let mut height = 768;
+            let mut pixels = vec![0; initial_width * initial_height];
+            let mut width = initial_width;
+            let mut height = initial_height;
             let mut revision = 0;
             let mut shown = false;
             let mut controller = input::Controller::attach(&mut window)?;
@@ -120,6 +135,9 @@ pub fn run(
                 }
                 let size = window.get_size();
                 if size.0 == 0 || size.1 == 0 {
+                    if let Some(focused) = &clipboard_focus {
+                        focused.store(false, Ordering::Relaxed);
+                    }
                     window.update();
                     let events = controller.poll(&mut window, false, (width, height))?;
                     if !events.is_empty() {
@@ -140,6 +158,9 @@ pub fn run(
                     rendered_revision = revision;
                 }
                 window.update_with_buffer(&rendered, size.0, size.1)?;
+                if let Some(focused) = &clipboard_focus {
+                    focused.store(ready && window.is_active(), Ordering::Relaxed);
+                }
                 let events = controller.poll(&mut window, ready, (width, height))?;
                 if !events.is_empty() {
                     sender.try_send(events).map_err(
@@ -158,6 +179,11 @@ pub fn run(
         stop.store(true, Ordering::Relaxed);
         worker.join().map_err(|_| "desktop worker panicked")?;
         let _ = shutdown.shutdown(Shutdown::Both);
+        if result.is_err()
+            && let Some(error) = &shared.lock().unwrap().error
+        {
+            return Err(error.clone().into());
+        }
         result
     })
 }
@@ -169,6 +195,7 @@ fn receive(
     shared: &Mutex<Display>,
     stop: &AtomicBool,
     input: &Receiver<Vec<Input>>,
+    clipboard: &mut Option<crate::clipboard::Clipboard>,
 ) -> Result<(), Error> {
     let mut pending = Vec::new();
     let mut bytes = [0u8; 16384];
@@ -177,6 +204,11 @@ fn receive(
     let mut deadline = Instant::now() + Duration::from_secs(30);
     let mut partial_since = None;
     while !stop.load(Ordering::Relaxed) {
+        if let Some(clipboard) = clipboard {
+            for packet in clipboard.poll().map_err(|e| e.to_string())? {
+                tls::write_plaintext(connection, stream, &data::encode(&packet)?)?;
+            }
+        }
         // A bounded channel preserves input ordering without blocking the UI.
         for events in input.try_iter().take(128) {
             if stop.load(Ordering::Relaxed) {
@@ -214,7 +246,19 @@ fn receive(
                         break;
                     }
                     let replies = if pending[0] == 3 {
-                        state.receive(data::decode(&pending[..length])?)?
+                        let payload = data::decode(&pending[..length])?;
+                        if payload.first() == Some(&0x68) {
+                            let (channel, body) = linrdp_proto::channel::indication(payload)?;
+                            if let Some(clipboard) =
+                                clipboard.as_mut().filter(|c| c.channel() == channel)
+                            {
+                                clipboard.receive(body).map_err(|e| e.to_string())?
+                            } else {
+                                state.receive(payload)?
+                            }
+                        } else {
+                            state.receive(payload)?
+                        }
                     } else {
                         state.receive_fastpath(&pending[..length])?;
                         Vec::new()

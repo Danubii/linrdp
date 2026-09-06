@@ -20,6 +20,7 @@ pub struct Settings {
     pub width: u16,
     pub height: u16,
     pub keyboard_layout: u32,
+    pub clipboard: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -27,6 +28,7 @@ impl Default for Settings {
             width: 1024,
             height: 768,
             keyboard_layout: 0x409,
+            clipboard: false,
         }
     }
 }
@@ -35,6 +37,7 @@ impl Default for Settings {
 pub struct ServerSettings {
     pub version: u32,
     pub io_channel: u16,
+    pub clipboard_channel: Option<u16>,
     pub early_capability_flags: u32,
 }
 
@@ -45,6 +48,9 @@ pub const ATTACH_USER: &[u8] = &[0x28];
 pub fn connect_initial(settings: Settings, protocol: SecurityProtocol) -> Result<Vec<u8>, Error> {
     if !(200..=8192).contains(&settings.width) || !(200..=8192).contains(&settings.height) {
         return Err(Error("desktop dimensions must be between 200 and 8192"));
+    }
+    if u32::from(settings.width) * u32::from(settings.height) > 16_777_216 {
+        return Err(Error("desktop exceeds pixel budget"));
     }
     let gcc = gcc::request(settings, protocol);
     let mut body = vec![4, 1, 1, 4, 1, 1, 1, 1, 0xff];

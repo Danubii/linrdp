@@ -261,3 +261,29 @@ and checked cancellation between queued input batches. These changes do not
 claim to fix the synthetic burst behavior. The temporary test document was
 cleared after testing; private captures and test injection helpers are not
 project dependencies or public artifacts.
+
+
+## Resolution, clipboard and shifted keys
+
+On 2026-09-06, the Windows host accepted requested desktop dimensions of
+1920×1080 and 1280×800 at 16-bit color. These are connection-time settings;
+local window resizing still scales rather than changing the remote resolution.
+
+Unicode clipboard text passed in both directions, including Danish characters
+and line breaks. A folder copied in Nautilus was pasted in Windows File Explorer,
+then copied back and pasted in another Nautilus directory. All file SHA-256
+hashes and relative paths matched, including a 150,001-byte binary, a Danish
+filename, an empty file and an empty directory. The transfer required fixes for
+virtual-channel priority handling, SHOW_PROTOCOL on outgoing fragments, and the
+Windows four-byte trailer outside CLIPRDR dataLen. No shared drive was used.
+See [clipboard scope](clipboard.md) for limits and remaining work.
+
+Windows Notepad displayed lowercase and shifted uppercase letters with an actual
+Tab; copying the result back yielded exactly `aA\tb` (four characters).
+The Wayland library's original effective-symbol lookup failed a native XKB
+regression for shifted letters and Shift+Tab. The vendored base-level lookup
+passes that test, including modifier changes between press and release.
+
+Holding Shift while holding A also produced repeated uppercase letters; releasing
+Shift and typing B produced a lowercase final character. The copied-back result
+matched 19 uppercase A characters followed by lowercase b.

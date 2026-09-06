@@ -19,6 +19,12 @@ rpassword = "7"
 der = { version = "0.7.10", features = ["derive", "std"] }
 minifb = "0.28"
 raw-window-handle = "0.6.2"
+wl-clipboard-rs = "0.9.3"
+tempfile = "3"
+url = "2"
+libc = "0.2"
+cap-std = "4.0.3"
+rustix = { version = "1", features = ["fs"] }
 
 [dev-dependencies]
 rcgen = "0.14"

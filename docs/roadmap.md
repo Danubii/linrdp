@@ -31,14 +31,17 @@ All items below are planned unless explicitly marked complete.
 ## 2 — Simple desktop client
 
 - Native connection window: address, connect, credentials.
-- Session window, resize, fullscreen and useful connection errors.
+- [x] Initial resolution selection and centered window scaling.
+- Dynamic resolution, fullscreen and useful connection errors.
 - Disconnect/reconnect and concurrent connections; see [session design](sessions.md).
 - Validate against Windows RDP, xrdp and GNOME Remote Desktop.
 - Test Danish/US keyboards, Wayland/X11, scaling and network interruption.
 
 ## 3 — Everyday use
 
-- Clipboard, audio, recent connections and opt-in keyring integration.
+- [x] Wayland Unicode text and clipboard files/folders in both directions with Windows.
+- Broader clipboard compatibility, progress/cancellation UI and paste-on-demand.
+- Audio, recent connections and opt-in keyring integration.
 - Graphics pipeline and hardware-assisted decoding where supported.
 - Measure delivered FPS, frame pacing, memory and input-to-display latency.
 - Compare with an established client on identical hosts and networks.

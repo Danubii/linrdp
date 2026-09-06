@@ -29,7 +29,11 @@ pub fn run(
     stream: &mut TcpStream,
     protocol: SecurityProtocol,
 ) -> Result<(), Error> {
-    let (server, user) = setup(&mut TlsTransport { connection, stream }, protocol)?;
+    let (server, user) = setup(
+        &mut TlsTransport { connection, stream },
+        protocol,
+        mcs::Settings::default(),
+    )?;
     println!(
         "MCS/GCC settings accepted: server version {:#010x}; user channel {user}, I/O channel {} joined.",
         server.version, server.io_channel
@@ -44,23 +48,38 @@ pub fn connect_channels(
     connection: &mut rustls::ClientConnection,
     stream: &mut TcpStream,
     protocol: SecurityProtocol,
+    settings: mcs::Settings,
 ) -> Result<(mcs::ServerSettings, u16), Error> {
-    setup(&mut TlsTransport { connection, stream }, protocol)
+    setup(&mut TlsTransport { connection, stream }, protocol, settings)
 }
 
 fn setup(
     transport: &mut impl Transport,
     protocol: SecurityProtocol,
+    settings: mcs::Settings,
 ) -> Result<(mcs::ServerSettings, u16), Error> {
-    transport.send(&mcs::connect_initial(mcs::Settings::default(), protocol)?)?;
+    transport.send(&mcs::connect_initial(settings, protocol)?)?;
     let server = mcs::connect_response(&transport.receive()?, 0x0b)?;
+    if settings.clipboard != server.clipboard_channel.is_some() {
+        return Err("server clipboard channel mismatch".into());
+    }
     transport.send(mcs::ERECT_DOMAIN)?;
     transport.send(mcs::ATTACH_USER)?;
     let user = mcs::attach_confirm(&transport.receive()?)?;
     if user == server.io_channel {
         return Err("server assigned the same user and I/O channel".into());
     }
-    for channel in [user, server.io_channel] {
+    if server.clipboard_channel == Some(user) {
+        return Err("clipboard channel overlaps user channel".into());
+    }
+    for channel in [
+        Some(user),
+        Some(server.io_channel),
+        server.clipboard_channel,
+    ]
+    .into_iter()
+    .flatten()
+    {
         transport.send(&mcs::join_request(user, channel)?)?;
         mcs::join_confirm(&transport.receive()?, user, channel)?;
     }
@@ -110,7 +129,12 @@ mod tests {
     #[test]
     fn joins_only_user_and_io_channels_in_order() {
         let mut peer = peer();
-        let (server, user) = setup(&mut peer, SecurityProtocol::CredSspEarlyAuth).unwrap();
+        let (server, user) = setup(
+            &mut peer,
+            SecurityProtocol::CredSspEarlyAuth,
+            mcs::Settings::default(),
+        )
+        .unwrap();
         assert_eq!((server.io_channel, user), (1003, 1007));
         assert!(peer.replies.is_empty());
         assert_eq!(
@@ -128,8 +152,60 @@ mod tests {
         for (reply, offset) in [(0, 5), (1, 1), (2, 5), (3, 7)] {
             let mut peer = peer();
             peer.replies[reply][offset] ^= 1;
-            assert!(setup(&mut peer, SecurityProtocol::CredSspEarlyAuth).is_err());
+            assert!(
+                setup(
+                    &mut peer,
+                    SecurityProtocol::CredSspEarlyAuth,
+                    mcs::Settings::default()
+                )
+                .is_err()
+            );
             assert_eq!(peer.sent.len(), [1, 3, 4, 5][reply]);
         }
+    }
+    #[test]
+    fn clipboard_is_joined_only_when_requested_and_returned() {
+        let mut response = response();
+        let n = response.len();
+        response[2] += 4;
+        let octets = response
+            .windows(4)
+            .position(|b| b == [4, 54, 0, 5])
+            .unwrap();
+        response[octets + 1] += 4;
+        let gcc = response
+            .windows(3)
+            .position(|b| b == [1, 42, 0x14])
+            .unwrap();
+        response[gcc + 1] += 4;
+        let data = response.windows(4).position(|b| b == b"McDn").unwrap();
+        response[data + 4] += 4;
+        response[n - 6] = 12;
+        response[n - 2] = 1;
+        response.extend([0xec, 3, 0, 0]);
+        let mut p = peer();
+        p.replies[0] = response.clone();
+        p.replies.push_back(vec![0x3e, 0, 0, 6, 3, 0xec, 3, 0xec]);
+        let settings = mcs::Settings {
+            clipboard: true,
+            ..Default::default()
+        };
+        let (server, _) = setup(&mut p, SecurityProtocol::CredSspEarlyAuth, settings).unwrap();
+        assert_eq!(server.clipboard_channel, Some(1004));
+        assert_eq!(p.sent.last().unwrap(), &[0x38, 0, 6, 3, 0xec]);
+        let mut p = peer();
+        p.replies[0] = response;
+        assert!(
+            setup(
+                &mut p,
+                SecurityProtocol::CredSspEarlyAuth,
+                mcs::Settings::default()
+            )
+            .is_err()
+        );
+        assert_eq!(p.sent.len(), 1);
+        let mut p = peer();
+        assert!(setup(&mut p, SecurityProtocol::CredSspEarlyAuth, settings).is_err());
+        assert_eq!(p.sent.len(), 1);
     }
 }

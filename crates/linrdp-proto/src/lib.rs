@@ -6,3 +6,6 @@ pub mod data;
 pub mod desktop;
 pub mod mcs;
 pub mod negotiation;
+
+pub mod channel;
+pub mod clipboard;

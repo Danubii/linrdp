@@ -6,7 +6,9 @@ activation, then opens a native desktop display. The password is prompted
 locally after certificate verification. Connection setup still starts from
 the terminal; there is no graphical connection form yet.
 
-The initial profile requests 1024×768 at 16 bits per pixel. The decoder supports
+The initial profile requests 1024×768 at 16 bits per pixel by default.
+`--size WIDTHxHEIGHT` selects 200–8192 pixels per dimension, bounded by the
+16-million-pixel budget. Windows has accepted both 1920×1080 and 1280×800. The decoder supports
 raw bottom-up RGB565 bitmaps with row padding and interleaved RLE bitmaps, with
 and without compression headers. The server controls the negotiated dimensions
 within a bounded 16-million-pixel budget. Window resizing scales the existing
@@ -52,7 +54,7 @@ capability negotiation and compositing are implemented in LinRDP. These
 libraries do not replace the protocol engine. Transitive dependencies may
 contain additional codecs/PDU types which this profile does not use.
 
-This first profile does not implement clipboard, audio, general RDS CAL license acquisition, drawing orders, bulk
+This first profile does not implement audio, general RDS CAL license acquisition, drawing orders, bulk
 compression, graphics-pipeline codecs, dynamic resolution,
 RemoteApp or automatic reconnection. Unsupported required messages stop the
 connection explicitly. The pointer is composited when Windows supplies a
@@ -101,6 +103,19 @@ Very fast synthetic input remains outside the verified compatibility claim.
 Windows host checks verified Start-menu keyboard shortcuts, a correctly placed
 mouse click, text in Notepad and lowercase typing after losing focus while Shift
 was held. See the [input report](windows-first-probe.md#basic-interactive-input).
+
+## Clipboard and Wayland keyboard correction
+
+Text and file copy/paste use the CLIPRDR channel; see [clipboard](clipboard.md)
+for usage, staging behavior, limits and verified file-manager transfers.
+
+A targeted minifb 0.28.0 vendor patch resolves Wayland key transitions at the
+base XKB level. Upstream's effective-symbol lookup could miss shifted letters,
+Shift+Tab and releases after modifier changes. Character callbacks retain their
+effective symbols. A native XKB regression fails with the original lookup and
+passes with the correction. Windows Notepad also displayed `aA`, an actual Tab,
+and a following lowercase `b`, which were copied back and checked byte-for-byte.
+See [vendor patch](../vendor/minifb/LINRDP-PATCH.md).
 
 ## Building on Linux
 

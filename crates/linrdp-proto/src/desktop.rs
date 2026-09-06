@@ -22,7 +22,7 @@ impl std::error::Error for Error {}
 fn bad(message: &str) -> Error {
     Error(message.into())
 }
-type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
