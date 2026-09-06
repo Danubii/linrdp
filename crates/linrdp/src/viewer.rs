@@ -179,6 +179,9 @@ fn receive(
     while !stop.load(Ordering::Relaxed) {
         // A bounded channel preserves input ordering without blocking the UI.
         for events in input.try_iter().take(128) {
+            if stop.load(Ordering::Relaxed) {
+                return Ok(());
+            }
             if let Some(packet) = state.input(&events)? {
                 tls::write_plaintext(connection, stream, &data::encode(&packet)?)?;
             }

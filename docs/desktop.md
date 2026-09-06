@@ -91,6 +91,13 @@ its actual native backend, reverses Wayland's downward-positive axis and uses
 movement accumulates into bounded RDP wheel events. Horizontal scrolling and
 extra mouse buttons are not advertised.
 
+A synthetic burst of 479 characters with effectively simultaneous press/release
+events lost characters in Windows Notepad despite matching outgoing event counts
+and a scancode-sequence checksum. FreeRDP reproduced losses with zero-dwell
+XTest input; a reference run with 5 ms between edges delivered the text. This
+does not establish a universal rate limit or rule out LinRDP timing issues.
+Very fast synthetic input remains outside the verified compatibility claim.
+
 Windows host checks verified Start-menu keyboard shortcuts, a correctly placed
 mouse click, text in Notepad and lowercase typing after losing focus while Shift
 was held. See the [input report](windows-first-probe.md#basic-interactive-input).

@@ -337,7 +337,7 @@ impl Session {
         let mut b = Vec::new();
         u32le(&mut b, self.share);
         b.extend([0, 1]);
-        u16le(&mut b, (body.len() + 4) as u16);
+        u16le(&mut b, body.len() as u16);
         b.extend([kind, 0, 0, 0]);
         b.extend(body);
         self.send(&share_control(self.user, 7, &b)?)

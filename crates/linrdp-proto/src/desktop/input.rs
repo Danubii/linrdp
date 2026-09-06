@@ -141,6 +141,7 @@ mod tests {
             }])
             .unwrap()
             .unwrap();
+        assert_eq!(&p[p.len() - 22..p.len() - 20], &[16, 0]); // Share Data payload length
         assert_eq!(
             &p[p.len() - 16..],
             &[1, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 1, 0x1d, 0, 0, 0]

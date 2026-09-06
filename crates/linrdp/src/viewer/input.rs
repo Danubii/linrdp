@@ -125,7 +125,10 @@ impl Controller {
             std::mem::take(&mut q.events)
         };
         for key in window.get_keys_pressed(KeyRepeat::Yes) {
-            if self.keys.contains(&key) && !transitions.iter().any(|(k, _)| *k == key) {
+            if repeatable(key)
+                && self.keys.contains(&key)
+                && !transitions.iter().any(|(k, _)| *k == key)
+            {
                 transitions.push((key, true));
             }
         }
@@ -221,6 +224,22 @@ impl Controller {
         }
         events
     }
+}
+fn repeatable(key: Key) -> bool {
+    !matches!(
+        key,
+        Key::LeftCtrl
+            | Key::RightCtrl
+            | Key::LeftShift
+            | Key::RightShift
+            | Key::LeftAlt
+            | Key::RightAlt
+            | Key::LeftSuper
+            | Key::RightSuper
+            | Key::CapsLock
+            | Key::NumLock
+            | Key::ScrollLock
+    )
 }
 fn key_event(key: Key, down: bool) -> Option<Input> {
     use Key::*;
@@ -354,6 +373,9 @@ mod tests {
     }
     #[test]
     fn modifier_release_before_next_key_keeps_event_order() {
+        assert!(!repeatable(Key::LeftShift));
+        assert!(!repeatable(Key::CapsLock));
+        assert!(repeatable(Key::A));
         let mut c = Controller {
             focused: true,
             ..Controller::default()

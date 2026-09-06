@@ -237,3 +237,27 @@ Keyboard injection used temporary Wayland test tools rather than bypassing the
 client's window input path. Screenshots stayed local. Tests do not establish
 Danish-layout support, IME, all special keys, X11 input compatibility or a latency
 benchmark. See [desktop input scope](desktop.md#basic-interactive-input).
+
+### Wheel and synthetic burst checks
+
+Vertical Wayland wheel input moved the scratch document downward from its first
+line. Temporary event counters and a rolling checksum matched all 479 expected
+scancode presses and releases in a 60-line synthetic typing test, but Notepad
+lost characters for effectively simultaneous press/release events. Sending
+one input event per PDU did not resolve this; the final client keeps ordered
+batches. Temporary counters/checksums were removed from the implementation.
+
+A FreeRDP 3.30.0 reference run also lost characters with zero-dwell XTest events
+(376 characters displayed versus 479 expected). A reference run with 5 ms between
+edges delivered the 479-character sequence. The reference required XTest rather
+than wtype because its X11 physical-key mapping interpreted wtype's temporary
+keymap differently. This narrows the evidence to this host/application/test
+method; it does not prove a Windows-wide limit or exclude LinRDP timing issues.
+Rapid synthetic bursts remain a documented compatibility limitation.
+
+A follow-up corrected outgoing Share Data `uncompressedLength` to the payload
+length, added a wire assertion, suppressed meaningless modifier/lock-key repeats,
+and checked cancellation between queued input batches. These changes do not
+claim to fix the synthetic burst behavior. The temporary test document was
+cleared after testing; private captures and test injection helpers are not
+project dependencies or public artifacts.
