@@ -36,7 +36,8 @@ explicit local account use `MACHINE\username`. NTLM-disabled hosts are unsupport
 6. Encode TSPasswordCreds inside TSCredentials with UTF-16LE fields, seal them
    and send only authInfo. If HYBRID_EX was selected, read the four-byte early
    authorization result. With HYBRID alone, report delegation without claiming
-   confirmed authorization. Close the connection; MCS/session setup is pending.
+   confirmed authorization. `login` closes the connection here. `session-probe`
+   continues with [MCS/GCC settings and channel setup](mcs.md).
 
 ## Bounds and secrets
 

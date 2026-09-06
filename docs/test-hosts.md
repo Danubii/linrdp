@@ -2,7 +2,8 @@
 
 Start with one Windows host, then add a Linux host. Keep normal RDP security
 settings enabled. Diagnostics cover negotiation, TLS and an experimental NTLM
-CredSSP login. A graphical desktop is not implemented.
+CredSSP login, plus MCS/GCC settings and channel setup. A graphical desktop is
+not implemented.
 
 ## Windows
 
@@ -61,6 +62,18 @@ no credentials. Login prompts locally for a password and attempts NTLM once;
 use the account password, not a Windows Hello PIN. No desktop is started.
 Record whether early authorization succeeded, failed or was unavailable.
 
+## Basic session setup
+
+After a successful login check, test settings and mandatory channel setup:
+
+```sh
+cargo run -p linrdp -- session-probe rdp-host.example 3389 --user 'MACHINE\tester' --ca /path/to/lab-ca.pem
+```
+
+The same hidden-password prompt and trust options apply. Record the server core
+version, user/I/O channel identifiers and exit code. The current diagnostic
+requests 1024×768 at 16-bit color and stops before desktop activation.
+
 ## Result template
 
 Copy this into a local test note. Redact private hostnames/IPs before publishing
@@ -80,6 +93,7 @@ Probe result and exit code:
 TLS result and exit code:
 NLA probe result and exit code:
 Login / early authorization result and exit code:
+Session probe result, channel IDs and exit code:
 Trust source (system / explicit PEM / certificate pin):
 Fingerprint provenance and independent confirmation (if pinned):
 Certificate DNS/IP match:
