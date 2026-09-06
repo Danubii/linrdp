@@ -91,7 +91,7 @@ struct WireRequest<'a> {
     #[asn1(context_specific = "3", tag_mode = "EXPLICIT", optional = "true")]
     pub_key_auth: Option<OctetStringRef<'a>>,
     #[asn1(context_specific = "4", tag_mode = "EXPLICIT", optional = "true")]
-    error_code: Option<u32>,
+    error_code: Option<i64>,
     #[asn1(context_specific = "5", tag_mode = "EXPLICIT", optional = "true")]
     client_nonce: Option<OctetStringRef<'a>>,
 }
@@ -166,7 +166,7 @@ impl<'a> TsRequest<'a> {
                 .unwrap_or_default(),
             auth_info: wire.auth_info.map(|value| value.as_bytes()),
             pub_key_auth: wire.pub_key_auth.map(|value| value.as_bytes()),
-            error_code: wire.error_code,
+            error_code: wire.error_code.map(decode_status).transpose()?,
             client_nonce: nonce,
         })
     }
@@ -196,7 +196,7 @@ impl<'a> TsRequest<'a> {
             },
             auth_info: self.auth_info.map(OctetStringRef::new).transpose()?,
             pub_key_auth: self.pub_key_auth.map(OctetStringRef::new).transpose()?,
-            error_code: self.error_code,
+            error_code: self.error_code.map(i64::from),
             client_nonce: self
                 .client_nonce
                 .map(|value| OctetStringRef::new(value))
@@ -206,6 +206,18 @@ impl<'a> TsRequest<'a> {
             return Err(Error::TooLarge);
         }
         Ok(wire.to_der()?)
+    }
+}
+
+// NTSTATUS is a 32-bit bit pattern. Peers can encode the ASN.1 INTEGER
+// as either a signed LONG or a positive unsigned value; preserve both forms.
+fn decode_status(value: i64) -> Result<u32, Error> {
+    if value < 0 {
+        let signed =
+            i32::try_from(value).map_err(|_| Error::Invalid("error code exceeds 32 bits"))?;
+        Ok(u32::from_ne_bytes(signed.to_ne_bytes()))
+    } else {
+        u32::try_from(value).map_err(|_| Error::Invalid("error code exceeds 32 bits"))
     }
 }
 

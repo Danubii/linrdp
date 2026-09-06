@@ -81,3 +81,26 @@ are synthetic fixtures, not Windows account validation. Real-host account login
 has not been attempted. Local checks passed 56 tests, Clippy, formatting and a
 release build. Host identity remains based on the previously selected pin,
 without independent fingerprint confirmation on Windows.
+
+## First account login attempt
+
+Date: 2026-09-06. The user supplied an account and password for the same
+Windows host. The password was entered through the hidden terminal prompt,
+not command-line arguments or repository files. Account details are omitted.
+
+An initial connection closed while waiting at the password prompt. The next
+connection reached the authentication response, but the unsigned-only ASN.1
+status decoder rejected an INTEGER. After extending the decoder to accept
+signed 32-bit NTSTATUS representations as well as positive unsigned values,
+one further attempt returned `0xc000006d` (`STATUS_LOGON_FAILURE`).
+
+TLS verification with the selected certificate pin succeeded. Windows account
+login did not succeed, and neither credential delegation nor desktop activation
+was reached. The failure alone does not distinguish incorrect credentials,
+account naming or client NTLM interoperability. No further account retries were
+made. Confirm the Windows account authority and inspect the corresponding
+Windows logon failure event before choosing the next authentication test.
+
+The decoder fix retains strict DER validation and rejects values outside the
+signed/unsigned 32-bit range. Independent signed-status and overflow vectors
+were added. All 58 tests, Clippy and the release build passed locally.

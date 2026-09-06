@@ -178,3 +178,26 @@ fn debug_output_does_not_expose_authentication_payloads() {
         "TsRequest { version: 6, token_count: 1, has_auth_info: true, has_pub_key_auth: true, error_code: None, has_client_nonce: false }"
     );
 }
+
+#[test]
+fn accepts_signed_ntstatus_without_losing_failure_bits() {
+    let bytes = [
+        0x30, 0x0d, 0xa0, 3, 2, 1, 6, 0xa4, 6, 2, 4, 0xc0, 0, 0, 0x6d,
+    ];
+    let request = TsRequest::decode(&bytes).unwrap();
+    assert_eq!(request.error_code, Some(0xc000006d));
+    assert!(matches!(
+        request.check_server_status(),
+        Err(Error::ServerStatus(0xc000006d))
+    ));
+    assert_eq!(request.encode().unwrap(), LOGON_FAILURE);
+}
+
+#[test]
+fn rejects_status_integers_outside_signed_or_unsigned_32_bits() {
+    for value in [[1, 0, 0, 0, 0], [0xff, 0x7f, 0xff, 0xff, 0xff]] {
+        let mut bytes = vec![0x30, 0x0e, 0xa0, 3, 2, 1, 6, 0xa4, 7, 2, 5];
+        bytes.extend_from_slice(&value);
+        assert!(TsRequest::decode(&bytes).is_err());
+    }
+}
