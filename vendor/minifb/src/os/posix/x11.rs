@@ -274,6 +274,7 @@ pub struct Window {
     button_events_overflow: bool,
     prev_cursor: CursorStyle,
     active: bool,
+    needs_redraw: bool,
 
     should_close: bool, // received delete window message from X server
 
@@ -411,6 +412,7 @@ impl Window {
                 d.display,
                 handle,
                 xlib::StructureNotifyMask
+                    | xlib::ExposureMask
                     | xlib::KeyPressMask
                     | xlib::KeyReleaseMask
                     | xlib::ButtonPressMask
@@ -495,6 +497,7 @@ impl Window {
                 prev_cursor: CursorStyle::Arrow,
                 should_close: false,
                 active: false,
+                needs_redraw: true,
                 key_handler: KeyHandler::new(),
                 update_rate: UpdateRate::new(),
                 menu_counter: MenuHandle(0),
@@ -587,10 +590,14 @@ impl Window {
         check_buffer_size(buffer, buf_width, buf_height, buf_stride)?;
 
         unsafe { self.raw_blit_buffer(buffer, buf_width, buf_height, buf_stride) };
-
+        self.needs_redraw = false;
         self.update();
 
         Ok(())
+    }
+
+    pub fn needs_redraw(&self) -> bool {
+        self.needs_redraw
     }
 
     pub fn update(&mut self) {
@@ -1082,6 +1089,7 @@ impl Window {
             }
 
             xlib::ConfigureNotify => {
+                self.needs_redraw = true;
                 // TODO : pass this onto the application
                 self.width = ev.configure.width as u32;
                 self.height = ev.configure.height as u32;
@@ -1093,6 +1101,9 @@ impl Window {
                     &mut self.draw_buffer,
                 )
                 .expect("todo");
+            }
+            xlib::Expose => {
+                self.needs_redraw = true;
             }
             xlib::FocusOut => {
                 self.active = false;

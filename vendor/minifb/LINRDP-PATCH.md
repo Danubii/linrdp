@@ -18,6 +18,27 @@ session fails rather than silently losing a press or release. This behavior has
 local regression coverage; an actual Windows GUI double-click has not yet been
 verified.
 
+The POSIX `needs_redraw` query lets idle clients skip identical uploads while
+still answering Wayland configure events and repainting X11 exposure events.
+X11 requests a redraw on configure, including events that leave dimensions
+unchanged, and clears the request before dispatching new events after a blit.
+Wayland keeps requesting a redraw until submission acknowledges the latest
+configure serial. Its shared-memory pool also marks reused buffers busy again
+and installs the replacement buffer's release state after a resize, preventing
+writes into storage still owned by the compositor.
+The pool is capped at three buffers. If all are busy, submission is deferred
+while input and release events continue dispatching; `needs_redraw` stays set
+until the latest image is submitted, including a final static frame.
+
+Run the bounded-pool unit test with:
+
+```sh
+cargo test --manifest-path vendor/minifb/Cargo.toml --locked --lib linrdp_buffer_tests
+```
+
+An additional ignored test opens a small Wayland window and checks actual
+release/retry behavior: append `-- --ignored --nocapture` to that command.
+
 The regression test uses a real libxkbcommon state and an embedded keymap, without
 a display server. It covers Shift+letter, Shift+Tab, shifted digits and modifier
 changes between press and release. Run:

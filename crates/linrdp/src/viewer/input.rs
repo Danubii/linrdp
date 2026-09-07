@@ -69,12 +69,29 @@ impl Viewport {
             .filter(|n| *n <= 16_777_216)
             .ok_or("local window exceeds pixel limit")?;
         out.resize(size, 0);
-        out.fill(0);
+        if remote == window
+            && self.x == 0
+            && self.y == 0
+            && self.width == window.0
+            && self.height == window.1
+        {
+            out.copy_from_slice(source);
+            return Ok(());
+        }
+        // Clear only letterboxing; every viewport pixel is overwritten below.
+        out[..self.y * window.0].fill(0);
+        out[(self.y + self.height) * window.0..].fill(0);
+        // Resolve horizontal sampling once per frame instead of dividing for
+        // every pixel. This also keeps the nearest-neighbor mapping identical.
+        let columns: Vec<_> = (0..self.width).map(|x| x * remote.0 / self.width).collect();
         for y in 0..self.height {
             let row = y * remote.1 / self.height * remote.0;
-            let dst = (y + self.y) * window.0 + self.x;
-            for x in 0..self.width {
-                out[dst + x] = source[row + x * remote.0 / self.width];
+            let dst = (y + self.y) * window.0;
+            let line = &mut out[dst..dst + window.0];
+            line[..self.x].fill(0);
+            line[self.x + self.width..].fill(0);
+            for (pixel, &column) in line[self.x..self.x + self.width].iter_mut().zip(&columns) {
+                *pixel = source[row + column];
             }
         }
         Ok(())
@@ -517,6 +534,98 @@ mod tests {
         let mut out = Vec::new();
         v.render(&[1, 2, 3, 4], (2, 2), (6, 2), &mut out).unwrap();
         assert_eq!(out, [0, 0, 1, 2, 0, 0, 0, 0, 3, 4, 0, 0]);
+    }
+    #[test]
+    fn rendered_pixels_match_nearest_neighbor_through_size_changes() {
+        // Reuse dirty storage across native, scaled and letterboxed frames:
+        // skipped clearing must never retain pixels from an earlier viewport.
+        let mut out = vec![0xdeadbeef; 100];
+        for remote in [(7, 5), (3, 8), (1, 1)] {
+            let source: Vec<_> = (1..=remote.0 * remote.1).map(|n| n as u32).collect();
+            for window in [remote, (21, 15), (4, 3), (17, 8), (8, 17), (1, 1)] {
+                let v = Viewport::new(window, remote);
+                let mut expected = vec![0; window.0 * window.1];
+                for y in 0..v.height {
+                    for x in 0..v.width {
+                        expected[(v.y + y) * window.0 + v.x + x] =
+                            source[y * remote.1 / v.height * remote.0 + x * remote.0 / v.width];
+                    }
+                }
+                v.render(&source, remote, window, &mut out).unwrap();
+                assert_eq!(out, expected, "remote={remote:?}, window={window:?}");
+            }
+        }
+    }
+    #[test]
+    #[ignore = "CPU microbenchmark: run in release mode with --ignored --nocapture"]
+    fn benchmark_viewport() {
+        use std::{hint::black_box, time::Instant};
+
+        // Preserve the previous renderer as the comparison baseline.
+        fn baseline(
+            v: Viewport,
+            source: &[u32],
+            remote: (usize, usize),
+            window: (usize, usize),
+            out: &mut Vec<u32>,
+        ) {
+            out.resize(window.0 * window.1, 0);
+            out.fill(0);
+            for y in 0..v.height {
+                let row = y * remote.1 / v.height * remote.0;
+                let dst = (y + v.y) * window.0 + v.x;
+                for x in 0..v.width {
+                    out[dst + x] = source[row + x * remote.0 / v.width];
+                }
+            }
+        }
+        for (remote, window) in [
+            ((1920, 1080), (1920, 1080)),
+            ((1920, 1080), (1280, 720)),
+            ((1920, 1080), (1600, 1000)),
+            ((1280, 720), (1920, 1080)),
+        ] {
+            let source: Vec<_> = (0..remote.0 * remote.1).map(|n| n as u32).collect();
+            let v = Viewport::new(window, remote);
+            let mut outputs = [Vec::new(), Vec::new()];
+            baseline(v, &source, remote, window, &mut outputs[0]);
+            v.render(&source, remote, window, &mut outputs[1]).unwrap();
+            assert_eq!(outputs[0], outputs[1]);
+            let mut samples = [[0.; 2]; 5];
+            for (round, timings) in samples.iter_mut().enumerate() {
+                // Alternate order to reduce systematic warm-cache bias.
+                for implementation in [round % 2, 1 - round % 2] {
+                    let start = Instant::now();
+                    for _ in 0..100 {
+                        let (v, source, remote, window, out) = black_box((
+                            v,
+                            source.as_slice(),
+                            remote,
+                            window,
+                            &mut outputs[implementation],
+                        ));
+                        if implementation == 0 {
+                            baseline(v, source, remote, window, out);
+                        } else {
+                            v.render(source, remote, window, out).unwrap();
+                        }
+                        black_box(out);
+                    }
+                    timings[implementation] = start.elapsed().as_secs_f64() * 10.;
+                }
+            }
+            let mut timings = [samples.map(|row| row[0]), samples.map(|row| row[1])];
+            for values in &mut timings {
+                values.sort_by(f64::total_cmp);
+            }
+            assert_eq!(outputs[0], outputs[1]);
+            println!(
+                "{remote:?} -> {window:?}: baseline {:.3} ms/frame, optimized {:.3} ms/frame ({:.2}x); median of 5 x 100 frames",
+                timings[0][2],
+                timings[1][2],
+                timings[0][2] / timings[1][2]
+            );
+        }
     }
     #[test]
     fn matching_remote_uses_the_full_native_window() {

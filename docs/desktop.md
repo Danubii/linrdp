@@ -48,6 +48,12 @@ TPKT and fast-path frames survive idle read timeouts. Incomplete frames, activat
 first bitmap have deadlines; an active static desktop can remain idle. Closing
 the window cancels the receiver and closes the socket without sending logoff.
 Only the latest display is shared with the UI, avoiding an unbounded frame queue.
+Snapshot production follows UI consumption: the decoder applies every delta,
+but does not copy the full desktop for every packet while a snapshot is pending.
+The UI takes ownership of the pixel buffer and native-size presentation bypasses
+the local scaler. Unchanged images are not uploaded unless the native window
+needs repainting. The event loop targets 120 Hz; this is not a guarantee of
+120 distinct remote frames per second. See [performance](performance.md).
 Credentials in Client Info and the enclosing outgoing frame use zeroizing
 buffers. They are released before the display loop begins. Screen contents and
 reconnection cookies are never automatically written to disk.
@@ -90,9 +96,9 @@ PDUs. Native event queues preserve keyboard and mouse-button press/release order
 including very short clicks and double-click edges completed between rendered
 frames. The native pointer queue, UI event buffer and network input queue are
 bounded; overflow fails the session instead of silently dropping an edge or key
-release. A 20 ms receive poll budget lets outgoing input progress while the
+release. An 8 ms receive poll budget lets outgoing input progress while the
 remote desktop is static. This is a scheduling choice, not an end-to-end latency
-guarantee.
+guarantee. The desktop socket uses TCP_NODELAY for small input writes.
 
 Focus loss releases keys and buttons. Already-held keys/buttons are ignored on
 focus entry until released; minimizing and normal closure also release tracked

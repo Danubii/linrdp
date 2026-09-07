@@ -72,6 +72,19 @@ struct BufferPool {
     format: Format,
 }
 
+// Keep compositor stalls bounded: None permits allocation; Some selects only
+// released storage. WouldBlock means the caller must dispatch events and retry.
+fn select_buffer(
+    mut released: impl ExactSizeIterator<Item = bool> + DoubleEndedIterator,
+) -> std::io::Result<Option<usize>> {
+    let count = released.len();
+    match released.rposition(|available| available) {
+        Some(index) => Ok(Some(index)),
+        None if count < 3 => Ok(None),
+        None => Err(std::io::ErrorKind::WouldBlock.into()),
+    }
+}
+
 impl BufferPool {
     fn new(shm: Main<WlShm>, format: Format) -> Self {
         Self {
@@ -110,7 +123,7 @@ impl BufferPool {
     }
 
     fn get_buffer(&mut self, size: (i32, i32)) -> std::io::Result<(File, &Main<WlBuffer>)> {
-        let pos = self.pool.iter().rposition(|e| *e.buffer_state.borrow());
+        let pos = select_buffer(self.pool.iter().map(|e| *e.buffer_state.borrow()))?;
         let size_bytes = size.0 * size.1 * std::mem::size_of::<u32>() as i32;
 
         // If possible, take an older shm_pool and create a new buffer in it
@@ -125,11 +138,16 @@ impl BufferPool {
             if self.pool[idx].fb_size != size {
                 let new_buffer = Self::create_shm_buffer(&self.pool[idx].pool, size, self.format);
                 let old_buffer = std::mem::replace(&mut self.pool[idx].buffer, new_buffer.0);
+                self.pool[idx].buffer_state = new_buffer.1;
                 old_buffer.destroy();
                 self.pool[idx].fb_size = size;
             }
 
-            Ok((self.pool[idx].fd.try_clone()?, &self.pool[idx].buffer))
+            let fd = self.pool[idx].fd.try_clone()?;
+            // A released buffer becomes compositor-owned again on submission.
+            // Never overwrite it until its own next wl_buffer.release event.
+            *self.pool[idx].buffer_state.borrow_mut() = false;
+            Ok((fd, &self.pool[idx].buffer))
         } else {
             let tempfile = tempfile::tempfile()?;
             let shm_pool = self.shm.create_pool(
@@ -166,6 +184,7 @@ struct DisplayInfo {
     cursor_surface: Main<WlSurface>,
     _display: Display,
     buf_pool: BufferPool,
+    redraw_pending: bool,
 }
 
 impl DisplayInfo {
@@ -306,6 +325,7 @@ impl DisplayInfo {
                 cursor,
                 cursor_surface,
                 buf_pool,
+                redraw_pending: false,
             },
             input_devices,
         ))
@@ -343,7 +363,17 @@ impl DisplayInfo {
 
     // Resizes when buffer is bigger or less
     fn update_framebuffer(&mut self, buffer: &[u32], size: (i32, i32)) -> std::io::Result<()> {
-        let (mut fd, buf) = self.buf_pool.get_buffer(size)?;
+        let (mut fd, buf) = match self.buf_pool.get_buffer(size) {
+            Ok(buffer) => buffer,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                // update_with_buffer_stride still dispatches release events.
+                // Keep requesting the latest image even if no new remote frame
+                // arrives before a compositor-owned buffer becomes available.
+                self.redraw_pending = true;
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
 
         fd.seek(SeekFrom::Start(0))?;
 
@@ -366,6 +396,8 @@ impl DisplayInfo {
         self.surface
             .damage(0, 0, i32::max_value(), i32::max_value());
         self.surface.commit();
+
+        self.redraw_pending = false;
 
         Ok(())
     }
@@ -777,6 +809,10 @@ impl Window {
             .dispatch_pending(&mut (), |_, _, _| {})
             .map_err(|e| Error::WindowCreate(format!("Event dispatch failed: {:?}", e)))
             .unwrap();
+    }
+
+    pub fn needs_redraw(&self) -> bool {
+        self.display.redraw_pending || self.display.xdg_config.borrow().is_some()
     }
 
     pub fn update(&mut self) {
@@ -1331,6 +1367,81 @@ impl Drop for Window {
             ffi_dispatch!(XKBH, xkb_keymap_unref, self.xkb_keymap);
             ffi_dispatch!(XKBH, xkb_context_unref, self.xkb_context);
         }
+    }
+}
+
+#[cfg(test)]
+mod linrdp_buffer_tests {
+    use super::*;
+
+    #[test]
+    fn pool_waits_at_capacity_and_reuses_only_released_storage() {
+        for count in 0..3 {
+            assert_eq!(select_buffer(vec![false; count].into_iter()).unwrap(), None);
+        }
+        let mut released = [false; 3];
+        assert_eq!(select_buffer(released.iter().copied()).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        released[1] = true;
+        assert_eq!(select_buffer(released.iter().copied()).unwrap(), Some(1));
+        // Submission takes ownership again until another compositor release.
+        released[1] = false;
+        assert!(select_buffer(released.iter().copied()).is_err());
+        released[2] = true;
+        assert_eq!(select_buffer(released.iter().copied()).unwrap(), Some(2));
+    }
+
+    #[test]
+    #[ignore = "opens a small native Wayland window; requires a running compositor"]
+    fn native_wayland_busy_pool_retries_final_image() {
+        use std::time::{Duration, Instant};
+        let mut window = Window::new("LinRDP buffer lifecycle test", 64, 64, WindowOptions::default()).unwrap();
+        let mut pixels = vec![0x123456; 64 * 64];
+        // Deliberately do not dispatch releases: allocation must stop at three.
+        for _ in 0..8 {
+            window.display.update_framebuffer(&pixels, (64, 64)).unwrap();
+            assert!(window.display.buf_pool.pool.len() <= 3);
+        }
+        assert!(window.display.redraw_pending);
+        assert!(window.needs_redraw());
+        pixels.fill(0xabcdef);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while window.display.redraw_pending && Instant::now() < deadline {
+            window.update();
+            window.display.update_framebuffer(&pixels, (64, 64)).unwrap();
+            assert!(window.display.buf_pool.pool.len() <= 3);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!window.display.redraw_pending, "final static image was never submitted");
+        // Verify the final image reached submitted shared memory, rather than
+        // merely clearing the retry bit when the compositor released storage.
+        assert!(window.display.buf_pool.pool.iter().any(|entry| {
+            use std::os::unix::fs::FileExt;
+            let mut pixel = [0; 4];
+            entry.fd.read_exact_at(&mut pixel, 0).unwrap();
+            !*entry.buffer_state.borrow() && u32::from_ne_bytes(pixel) == 0xabcdef
+        }));
+        // Reuse the full pool at a new size. Replacement buffers must be busy
+        // under their own release state, not the old buffer's released flag.
+        let resized = vec![0x654321; 80 * 48];
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            window.update();
+            window.display.update_framebuffer(&resized, (80, 48)).unwrap();
+            assert!(window.display.buf_pool.pool.len() <= 3);
+            if !window.display.redraw_pending {
+                break;
+            }
+            assert!(Instant::now() < deadline, "resized image was never submitted");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(window.display.buf_pool.pool.iter().any(|entry| {
+            use std::os::unix::fs::FileExt;
+            let mut pixel = [0; 4];
+            entry.fd.read_exact_at(&mut pixel, 0).unwrap();
+            entry.fb_size == (80, 48)
+                && !*entry.buffer_state.borrow()
+                && u32::from_ne_bytes(pixel) == 0x654321
+        }));
     }
 }
 

@@ -104,6 +104,15 @@ impl Window {
         }
     }
 
+    pub fn needs_redraw(&self) -> bool {
+        match self {
+            #[cfg(feature = "x11")]
+            Window::X11(w) => w.needs_redraw(),
+            #[cfg(feature = "wayland")]
+            Window::Wayland(w) => w.needs_redraw(),
+        }
+    }
+
     pub fn update(&mut self) {
         match self {
             #[cfg(feature = "x11")]

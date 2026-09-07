@@ -1,6 +1,7 @@
 //! Native first-desktop viewer. Window/event handling stays on the main thread.
 use crate::{session, tls};
 mod input;
+mod presentation;
 mod resize;
 use linrdp_proto::{
     data,
@@ -20,11 +21,13 @@ use std::{
 };
 
 type Error = Box<dyn std::error::Error>;
+#[derive(Default)]
 struct Display {
     width: usize,
     height: usize,
     pixels: Vec<u32>,
     revision: u64,
+    pending: bool,
     active: bool,
     error: Option<String>,
     status: String,
@@ -41,6 +44,7 @@ pub fn run(
     host: &str,
     settings: linrdp_proto::mcs::Settings,
 ) -> Result<(), Error> {
+    stream.set_nodelay(true)?;
     let (server, user) = session::connect_channels(connection, stream, protocol, settings)?;
     let mut state = Session::new(user, server.io_channel)?;
     let mut clipboard = if settings.clipboard {
@@ -79,12 +83,14 @@ pub fn run(
             ..WindowOptions::default()
         },
     )?;
-    window.set_target_fps(60);
+    // Poll input at 120 Hz; unchanged desktops do not submit pixel buffers.
+    window.set_target_fps(120);
     let shared = Mutex::new(Display {
         width: initial_width,
         height: initial_height,
         pixels: vec![0; initial_width * initial_height],
         revision: 0,
+        pending: false,
         active: false,
         error: None,
         status: "Connecting".into(),
@@ -131,6 +137,7 @@ pub fn run(
             let mut rendered = Vec::new();
             let mut rendered_size = (0, 0);
             let mut rendered_revision = u64::MAX;
+            let mut rendered_remote = (0, 0);
             while window.is_open() {
                 let ready;
                 {
@@ -147,11 +154,13 @@ pub fn run(
                         window.set_title(&format!("LinRDP — {}", frame.status));
                     }
                     if frame.revision != revision {
-                        pixels.clone_from(&frame.pixels);
+                        frame.take_pixels(&mut pixels);
                         width = frame.width;
                         height = frame.height;
                         revision = frame.revision;
-                        window.set_title(&format!("LinRDP — {host} — {width}×{height}"));
+                        if !shown || (width, height) != rendered_remote {
+                            window.set_title(&format!("LinRDP — {host} — {width}×{height}"));
+                        }
                     }
                     ready = frame.active && revision != 0;
                 }
@@ -169,17 +178,26 @@ pub fn run(
                     }
                     continue;
                 }
-                if size != rendered_size || revision != rendered_revision {
-                    input::Viewport::new(size, (width, height)).render(
-                        &pixels,
-                        (width, height),
-                        size,
-                        &mut rendered,
-                    )?;
+                if size != rendered_size || revision != rendered_revision || window.needs_redraw() {
+                    if size == (width, height) {
+                        window.update_with_buffer(&pixels, width, height)?;
+                    } else {
+                        input::Viewport::new(size, (width, height)).render(
+                            &pixels,
+                            (width, height),
+                            size,
+                            &mut rendered,
+                        )?;
+                        window.update_with_buffer(&rendered, size.0, size.1)?;
+                    }
                     rendered_size = size;
+                    rendered_remote = (width, height);
                     rendered_revision = revision;
+                } else {
+                    // Keep focus, resize and input events moving without uploading
+                    // an identical desktop to the compositor.
+                    window.update();
                 }
-                window.update_with_buffer(&rendered, size.0, size.1)?;
                 if let Some(focused) = &clipboard_focus {
                     focused.store(ready && window.is_active(), Ordering::Relaxed);
                 }
@@ -227,6 +245,7 @@ fn receive(
     let mut bytes = [0u8; 16384];
     let mut last_phase = state.phase;
     let mut updates = state.revision;
+    let mut staging = Vec::new();
     let mut deadline = Instant::now() + Duration::from_secs(30);
     let mut partial_since = None;
     while !stop.load(Ordering::Relaxed) {
@@ -286,6 +305,13 @@ fn receive(
         {
             return Err("incomplete desktop packet timed out".into());
         }
+        presentation::publish(
+            state,
+            shared,
+            &mut staging,
+            &mut updates,
+            !channels.resize.as_ref().is_some_and(|r| r.waiting()),
+        );
         match tls::read_chunk(connection, stream, &mut bytes) {
             Ok(0) => return Err("server closed the desktop connection".into()),
             Ok(count) => {
@@ -358,17 +384,6 @@ fn receive(
                         if state.phase == Phase::Finalizing {
                             updates = 0;
                         }
-                    }
-                    if state.revision != updates && state.framebuffer.updates > 0 {
-                        let mut frame = shared.lock().unwrap();
-                        frame.width = usize::from(state.framebuffer.width);
-                        frame.height = usize::from(state.framebuffer.height);
-                        state.copy_display(&mut frame.pixels);
-                        frame.revision += 1;
-                        frame.active = state.phase == Phase::Active
-                            && state.framebuffer.updates > 0
-                            && !channels.resize.as_ref().is_some_and(|r| r.waiting());
-                        updates = state.revision;
                     }
                 }
             }

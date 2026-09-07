@@ -50,7 +50,8 @@ scrolling are implemented. Input goes to the focused session window.
 The initial keyboard profile is US; Danish layouts and IME are not yet validated.
 Wayland text and file copy/paste are enabled by default; use `--clipboard off`
 to disable sharing. See [clipboard behavior and limits](docs/clipboard.md) and
-[desktop scope and validation](docs/desktop.md).
+[desktop scope and validation](docs/desktop.md). Local presentation improvements
+and reproducible CPU benchmarks are described in [performance](docs/performance.md).
 
 ## Development
 

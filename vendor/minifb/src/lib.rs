@@ -458,8 +458,9 @@ impl Window {
 
     /// Updates the window (this is required to call in order to get keyboard/mouse input, etc)
     ///
-    /// Notice that when using this function then `update_with_buffer` should not be called for the same window.
-    /// Only one of the functions should be used.
+    /// On POSIX, clients may use this to poll an unchanged buffered window,
+    /// then call `update_with_buffer` when pixels change or `needs_redraw` is true.
+    /// Other backends should use only one update method for a given window.
     ///
     /// # Examples
     ///
@@ -712,6 +713,20 @@ impl Window {
     ))]
     pub fn take_mouse_button_events(&mut self) -> Option<Vec<MouseButtonEvent>> {
         self.0.take_mouse_button_events()
+    }
+
+    /// Whether a native configure or exposure event requires resubmitting the
+    /// current image, even when its pixels and dimensions have not changed.
+    /// Call `update` regularly to receive these events while otherwise idle.
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    pub fn needs_redraw(&self) -> bool {
+        self.0.needs_redraw()
     }
 
     /// Get the current movement of the scroll wheel.
