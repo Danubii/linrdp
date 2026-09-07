@@ -10,8 +10,30 @@ User, then Connect. Tab and Shift+Tab move between controls, Enter activates the
 focused control, arrow keys move through saved connections, and Esc exits.
 Ctrl+U clears the focused text field or profile-name prompt. Open
 Options to set the port, initial size, dynamic resolution, clipboard sharing,
-and certificate trust. Trust can use system roots, one CA file, or one SHA-256
-certificate fingerprint.
+and certificate trust. Trust uses system roots by default; an advanced connection
+can select a CA file. Manual certificate fingerprints remain available to the
+explicit command-line interface, not as a terminal-form field.
+
+When default system trust rejects only an unknown issuer or a certificate name
+mismatch, the terminal interface opens a fresh credential-free RDP/TLS probe. It
+verifies the certificate's TLS signature and validity, then shows the destination,
+subject, issuer, validity period and complete SHA-256 fingerprint before any
+password prompt. Cancel is the default. Connect once retries a fresh connection
+with that exact certificate; Trust and save does the same and records the pin
+only after the pinned TLS handshake succeeds. The latter does not wait for login
+or the desktop session to finish.
+
+Expiry, invalid signatures, network errors and authentication errors never open
+the approval dialog. Explicit `--ca` and `--cert-sha256` connections remain
+strict and never fall back to discovery. A saved certificate mismatch also stops
+with an error: LinRDP does not silently replace the pin or prompt to renew it.
+The noninteractive CLI never performs certificate discovery or trust prompting.
+
+Approved certificates are stored separately in
+`$XDG_CONFIG_HOME/linrdp/known_hosts.json`, falling back to
+`$HOME/.config/linrdp/known_hosts.json`. Each pin applies only to its host and
+port. The directory uses mode 0700 and files use mode 0600; updates are locked
+and atomic. Invalid trust data produces an error instead of being reset.
 
 Save creates a named connection. Edit loads the selected connection and changes
 Save to Update; Save as creates a separate copy. Delete always asks for

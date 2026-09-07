@@ -10,6 +10,7 @@ use std::time::Instant;
 use rustls::pki_types::{CertificateDer, ServerName, pem::PemObject};
 use rustls::{ClientConfig, ClientConnection, RootCertStore};
 
+pub mod discovery;
 pub mod pin;
 
 type Error = Box<dyn std::error::Error>;

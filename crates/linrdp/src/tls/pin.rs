@@ -1,4 +1,4 @@
-//! Explicit per-invocation certificate trust for RDP hosts without SANs.
+//! Explicit exact leaf-certificate trust for RDP hosts without SANs.
 //! A pin replaces CA/name validation, never TLS handshake signature validation.
 
 use std::{str::FromStr, sync::Arc};
@@ -8,10 +8,34 @@ use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, Server
 use rustls::crypto::{CryptoProvider, verify_tls12_signature, verify_tls13_signature};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{CertificateError, ClientConfig, DigitallySignedStruct, Error, SignatureScheme};
+use std::fmt;
 use x509_cert::der::Decode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Fingerprint([u8; 32]);
+
+impl Fingerprint {
+    pub(crate) fn for_der(der: &[u8]) -> Self {
+        Self(
+            digest(&SHA256, der)
+                .as_ref()
+                .try_into()
+                .expect("SHA-256 is 32 bytes"),
+        )
+    }
+}
+
+impl fmt::Display for Fingerprint {
+    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (index, byte) in self.0.iter().enumerate() {
+            if index != 0 {
+                output.write_str(":")?;
+            }
+            write!(output, "{byte:02X}")?;
+        }
+        Ok(())
+    }
+}
 
 impl FromStr for Fingerprint {
     type Err = &'static str;

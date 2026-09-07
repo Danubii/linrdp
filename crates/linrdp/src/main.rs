@@ -5,6 +5,7 @@ mod ntlm;
 mod profiles;
 mod session;
 mod tls;
+mod trust_store;
 mod tui;
 mod viewer;
 
@@ -67,20 +68,182 @@ fn starts_tui(args: &[String], interactive: bool) -> bool {
 
 fn run_tui() -> Result<(), Box<dyn std::error::Error>> {
     let mut message = None;
+    let mut resume = None;
     loop {
-        match tui::run(message.take())? {
+        match tui::run(message.take(), resume.as_deref())? {
             tui::Outcome::Quit => return Ok(()),
             tui::Outcome::Connect(args) => {
-                message = Some(match run(args) {
+                resume = Some(args.clone());
+                message = Some(match run_tui_connection(args)? {
                     Ok(()) => "Disconnected. Choose a connection to continue.".into(),
-                    Err(error) => format!("Connection ended: {error}"),
+                    Err(error) => error,
                 });
             }
         }
     }
 }
 
+fn run_tui_connection(args: Vec<String>) -> Result<Result<(), String>, Box<dyn std::error::Error>> {
+    let options = match Options::parse(&args) {
+        Ok(options) => options,
+        Err(error) => return Ok(Err(format!("Check connection details: {error}"))),
+    };
+    if options.ca_file.is_some() || options.fingerprint.is_some() {
+        return Ok(run(args).map_err(|error| format!("Connection ended: {error}")));
+    }
+    let store = match trust_store::Store::discover() {
+        Ok(store) => store,
+        Err(error) => {
+            return Ok(Err(format!(
+                "Could not open saved certificate trust: {error}"
+            )));
+        }
+    };
+    let saved = match store.get(&options.host, options.port) {
+        Ok(saved) => saved,
+        Err(error) => {
+            return Ok(Err(format!(
+                "Could not read saved certificate trust: {error}"
+            )));
+        }
+    };
+    if let Some(pin) = saved {
+        let pinned = with_pin(&args, pin);
+        return Ok(run(pinned).map_err(|error| connection_error(error, true)));
+    }
+    match run(args.clone()) {
+        Ok(()) => Ok(Ok(())),
+        Err(error) if is_approvable_certificate_error(error.as_ref()) => {
+            let details = match discover_certificate(&options.host, options.port) {
+                Ok(details) => details,
+                Err(error) => {
+                    return Ok(Err(format!(
+                        "Could not inspect the server certificate: {error}"
+                    )));
+                }
+            };
+            let pin = details.fingerprint;
+            let prompt = tui::CertificatePrompt {
+                destination: format!("{}:{}", options.host, options.port),
+                subject: details.subject,
+                issuer: details.issuer,
+                valid_from: details.valid_from,
+                valid_until: details.valid_until,
+                fingerprint: pin.to_string(),
+            };
+            match tui::confirm_certificate(&prompt)? {
+                tui::CertificateChoice::Cancel => Ok(Err(
+                    "Certificate was not approved. Connection cancelled before password entry."
+                        .into(),
+                )),
+                tui::CertificateChoice::Once => {
+                    Ok(run(with_pin(&args, pin))
+                        .map_err(|error| format!("Connection ended: {error}")))
+                }
+                tui::CertificateChoice::Trust => {
+                    let host = options.host.clone();
+                    let port = options.port;
+                    let mut remember = || store.remember(&host, port, pin);
+                    Ok(run_with_tls_hook(with_pin(&args, pin), Some(&mut remember))
+                        .map_err(|error| format!("Connection ended: {error}")))
+                }
+            }
+        }
+        Err(error) => Ok(Err(format!("Connection ended: {error}"))),
+    }
+}
+
+fn with_pin(args: &[String], pin: tls::pin::Fingerprint) -> Vec<String> {
+    let mut pinned = args.to_vec();
+    pinned.extend(["--cert-sha256".into(), pin.to_string()]);
+    pinned
+}
+
+fn discover_certificate(
+    host: &str,
+    port: u16,
+) -> Result<tls::discovery::CertificateDetails, Box<dyn std::error::Error>> {
+    let name = rustls::pki_types::ServerName::try_from(host.to_owned())?;
+    let addresses: Vec<_> = (host, port).to_socket_addrs()?.collect();
+    let deadline = Instant::now() + TIMEOUT;
+    let mut last_error: Option<Box<dyn std::error::Error>> = None;
+    for address in addresses {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match TcpStream::connect_timeout(&address, remaining) {
+            Ok(mut stream) => match exchange(&mut stream).and_then(|_| {
+                tls::discovery::discover(&mut stream, name.clone(), Instant::now() + TIMEOUT)
+            }) {
+                Ok(details) => return Ok(details),
+                Err(error) => last_error = Some(error),
+            },
+            Err(error) => last_error = Some(error.into()),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| "certificate discovery timed out".into()))
+}
+
+#[derive(Debug)]
+struct TlsVerificationError(Box<dyn std::error::Error>);
+impl std::fmt::Display for TlsVerificationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "TLS verification failed: {}", self.0)
+    }
+}
+impl std::error::Error for TlsVerificationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+
+fn is_approvable_certificate_error(mut error: &(dyn std::error::Error + 'static)) -> bool {
+    loop {
+        if let Some(rustls::Error::InvalidCertificate(reason)) =
+            error.downcast_ref::<rustls::Error>()
+            && matches!(
+                reason,
+                rustls::CertificateError::UnknownIssuer
+                    | rustls::CertificateError::NotValidForName
+                    | rustls::CertificateError::NotValidForNameContext { .. }
+            )
+        {
+            return true;
+        }
+        if let Some(io_error) = error.downcast_ref::<std::io::Error>()
+            && let Some(inner) = io_error.get_ref()
+            && is_approvable_certificate_error(inner)
+        {
+            return true;
+        }
+        let Some(source) = error.source() else {
+            return false;
+        };
+        error = source;
+    }
+}
+
+fn connection_error(error: Box<dyn std::error::Error>, saved_pin: bool) -> String {
+    let tls_failure = error.downcast_ref::<TlsVerificationError>().is_some()
+        || error
+            .source()
+            .is_some_and(|source| source.downcast_ref::<TlsVerificationError>().is_some());
+    if saved_pin && tls_failure {
+        format!("Saved certificate trust failed; no changes were made: {error}")
+    } else {
+        format!("Connection ended: {error}")
+    }
+}
+
 fn run(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    run_with_tls_hook(args, None)
+}
+
+fn run_with_tls_hook(
+    args: Vec<String>,
+    mut after_tls: Option<&mut dyn FnMut() -> Result<(), Box<dyn std::error::Error>>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     if args.is_empty() || matches!(args.as_slice(), [flag] if flag == "--help" || flag == "-h") {
         println!("{HELP}");
         return Ok(());
@@ -121,7 +284,7 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(config) = tls_config {
                     let mut connection =
                         tls::handshake(&mut stream, server_name, config, Instant::now() + TIMEOUT)
-                            .map_err(|error| format!("TLS verification failed: {error}"))?;
+                            .map_err(TlsVerificationError)?;
                     println!(
                         "TLS verified for {host}: {:?}, {:?}.",
                         connection
@@ -138,6 +301,9 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
                         );
                     } else {
                         println!("Certificate chain, validity and hostname/IP verified.");
+                    }
+                    if let Some(after_tls) = after_tls.as_mut() {
+                        after_tls()?;
                     }
                     if options.nla {
                         let identity = nla::run(
@@ -567,6 +733,39 @@ mod tests {
         assert!(starts_tui(&["tui".into()], false));
         assert!(!starts_tui(&["connect".into()], true));
         assert!(!starts_tui(&["--help".into()], true));
+    }
+
+    #[test]
+    fn only_approvable_certificate_errors_enter_discovery_flow() {
+        let unknown = TlsVerificationError(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            rustls::Error::InvalidCertificate(rustls::CertificateError::UnknownIssuer),
+        )));
+        assert!(is_approvable_certificate_error(&unknown));
+
+        let expired = TlsVerificationError(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            rustls::Error::InvalidCertificate(rustls::CertificateError::Expired),
+        )));
+        assert!(!is_approvable_certificate_error(&expired));
+        assert!(!is_approvable_certificate_error(&std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            "refused",
+        )));
+    }
+
+    #[test]
+    fn saved_trust_is_not_blamed_for_post_tls_connection_failures() {
+        let authentication: Box<dyn std::error::Error> =
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "login denied").into();
+        assert_eq!(
+            connection_error(authentication, true),
+            "Connection ended: login denied"
+        );
+        let certificate: Box<dyn std::error::Error> = Box::new(TlsVerificationError(Box::new(
+            rustls::Error::InvalidCertificate(rustls::CertificateError::UnknownIssuer),
+        )));
+        assert!(connection_error(certificate, true).starts_with("Saved certificate trust failed"));
     }
 
     #[test]

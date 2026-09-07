@@ -22,14 +22,30 @@ pub enum Outcome {
     Quit,
 }
 
+pub struct CertificatePrompt {
+    pub destination: String,
+    pub subject: String,
+    pub issuer: String,
+    pub valid_from: String,
+    pub valid_until: String,
+    pub fingerprint: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CertificateChoice {
+    Cancel,
+    Once,
+    Trust,
+}
+
 pub fn interactive_terminal() -> bool {
     io::stdin().is_terminal() && io::stdout().is_terminal()
 }
 
-pub fn run(message: Option<String>) -> Result<Outcome, Error> {
+pub fn run(message: Option<String>, initial: Option<&[String]>) -> Result<Outcome, Error> {
     let store = Store::discover()?;
     let profiles = store.load()?;
-    let mut app = App::new(profiles, message);
+    let mut app = App::new(profiles, message, initial);
     let mut persisted = app.profiles.clone();
     let mut terminal = Terminal::enter()?;
     loop {
@@ -56,6 +72,22 @@ pub fn run(message: Option<String>) -> Result<Outcome, Error> {
             },
             Command::Connect(arguments) => return Ok(Outcome::Connect(arguments)),
             Command::Quit => return Ok(Outcome::Quit),
+        }
+    }
+}
+
+pub fn confirm_certificate(prompt: &CertificatePrompt) -> Result<CertificateChoice, Error> {
+    let mut dialog = CertificateDialog::default();
+    let mut terminal = Terminal::enter()?;
+    loop {
+        dialog.draw(&mut terminal.out, prompt)?;
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && let Some(choice) = dialog.key(key)
+        {
+            return Ok(choice);
         }
     }
 }
@@ -92,6 +124,101 @@ impl Drop for Terminal {
     }
 }
 
+#[derive(Default)]
+struct CertificateDialog {
+    selected: usize,
+}
+
+impl CertificateDialog {
+    fn key(&mut self, key: KeyEvent) -> Option<CertificateChoice> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('c') | KeyCode::Char('C') => {
+                Some(CertificateChoice::Cancel)
+            }
+            KeyCode::Char('o') | KeyCode::Char('O') => Some(CertificateChoice::Once),
+            KeyCode::Char('t') | KeyCode::Char('T') => Some(CertificateChoice::Trust),
+            KeyCode::Right | KeyCode::Tab => {
+                self.selected = (self.selected + 1) % 3;
+                None
+            }
+            KeyCode::Left | KeyCode::BackTab => {
+                self.selected = self.selected.checked_sub(1).unwrap_or(2);
+                None
+            }
+            KeyCode::Enter => Some(
+                [
+                    CertificateChoice::Cancel,
+                    CertificateChoice::Once,
+                    CertificateChoice::Trust,
+                ][self.selected],
+            ),
+            _ => None,
+        }
+    }
+
+    fn draw(&self, out: &mut Stdout, prompt: &CertificatePrompt) -> io::Result<()> {
+        let (width, height) = terminal::size()?;
+        queue!(out, MoveTo(0, 0), Clear(ClearType::All))?;
+        if width < MIN_WIDTH || height < MIN_HEIGHT {
+            queue!(
+                out,
+                Print("Certificate review needs a terminal at least 80×24. Resize or press Esc.")
+            )?;
+            return out.flush();
+        }
+        line(out, 2, 1, "Review remote desktop certificate", true)?;
+        line(
+            out,
+            2,
+            3,
+            "This computer uses a certificate your system does not recognize.",
+            false,
+        )?;
+        detail(out, 2, 5, width, "Destination", &prompt.destination)?;
+        detail(out, 2, 7, width, "Subject", &prompt.subject)?;
+        detail(out, 2, 9, width, "Issuer", &prompt.issuer)?;
+        detail(
+            out,
+            2,
+            11,
+            width,
+            "Valid",
+            &format!("{} to {}", prompt.valid_from, prompt.valid_until),
+        )?;
+        line(out, 2, 13, "SHA-256 fingerprint", true)?;
+        for (row, chunk) in prompt.fingerprint.as_bytes().chunks(76).enumerate() {
+            line(
+                out,
+                2,
+                14 + row as u16,
+                std::str::from_utf8(chunk).unwrap_or("invalid fingerprint"),
+                false,
+            )?;
+        }
+        line(
+            out,
+            2,
+            18,
+            "No password sent. Trust and save remembers this computer's certificate.",
+            false,
+        )?;
+        for (index, (x, label)) in [(2, "Cancel"), (18, "Connect once"), (40, "Trust and save")]
+            .into_iter()
+            .enumerate()
+        {
+            button(out, x, 20, label, self.selected == index)?;
+        }
+        line(
+            out,
+            2,
+            22,
+            "Left/Right or Tab chooses · Enter confirms · Esc cancels",
+            false,
+        )?;
+        out.flush()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Focus {
     Saved,
@@ -115,22 +242,22 @@ enum Focus {
 enum Trust {
     System,
     Ca,
-    Fingerprint,
+    SavedPin,
 }
 
 impl Trust {
     fn next(self) -> Self {
         match self {
             Self::System => Self::Ca,
-            Self::Ca => Self::Fingerprint,
-            Self::Fingerprint => Self::System,
+            Self::Ca => Self::System,
+            Self::SavedPin => Self::System,
         }
     }
     fn label(self) -> &'static str {
         match self {
             Self::System => "System trust",
             Self::Ca => "CA file",
-            Self::Fingerprint => "Fingerprint",
+            Self::SavedPin => "Saved fingerprint",
         }
     }
 }
@@ -145,6 +272,7 @@ struct Form {
     clipboard: bool,
     trust: Trust,
     trust_value: String,
+    fingerprint: Option<String>,
 }
 
 impl Default for Form {
@@ -158,6 +286,7 @@ impl Default for Form {
             clipboard: true,
             trust: Trust::System,
             trust_value: String::new(),
+            fingerprint: None,
         }
     }
 }
@@ -166,8 +295,8 @@ impl Form {
     fn from_profile(profile: &Profile) -> Self {
         let (trust, trust_value) = if let Some(path) = &profile.ca {
             (Trust::Ca, path.clone())
-        } else if let Some(fingerprint) = &profile.fingerprint {
-            (Trust::Fingerprint, fingerprint.clone())
+        } else if profile.fingerprint.is_some() {
+            (Trust::SavedPin, String::new())
         } else {
             (Trust::System, String::new())
         };
@@ -180,6 +309,7 @@ impl Form {
             clipboard: profile.clipboard,
             trust,
             trust_value,
+            fingerprint: profile.fingerprint.clone(),
         }
     }
 
@@ -194,7 +324,9 @@ impl Form {
             dynamic_resolution: self.dynamic,
             clipboard: self.clipboard,
             ca: (self.trust == Trust::Ca).then(|| self.trust_value.trim().into()),
-            fingerprint: (self.trust == Trust::Fingerprint).then(|| self.trust_value.trim().into()),
+            fingerprint: (self.trust == Trust::SavedPin)
+                .then(|| self.fingerprint.clone())
+                .flatten(),
         };
         profile.validate()?;
         Ok(profile)
@@ -230,8 +362,8 @@ enum Command {
 }
 
 impl App {
-    fn new(profiles: Vec<Profile>, message: Option<String>) -> Self {
-        Self {
+    fn new(profiles: Vec<Profile>, message: Option<String>, initial: Option<&[String]>) -> Self {
+        let mut app = Self {
             profiles,
             selected: 0,
             form: Form::default(),
@@ -241,7 +373,33 @@ impl App {
                 .unwrap_or_else(|| "Tab moves · Enter chooses · Ctrl+U clears · Esc quits".into()),
             modal: None,
             editing: None,
+        };
+        if let Some(args) = initial
+            && let Ok(options) = crate::Options::parse(args)
+        {
+            app.form = Form {
+                computer: options.host,
+                user: options.user.unwrap_or_default(),
+                port: options.port.to_string(),
+                size: options
+                    .size
+                    .map_or_else(|| "1024x768".into(), |(w, h)| format!("{w}x{h}")),
+                dynamic: options.dynamic_resolution,
+                clipboard: options.clipboard,
+                trust: if options.ca_file.is_some() {
+                    Trust::Ca
+                } else if options.fingerprint.is_some() {
+                    Trust::SavedPin
+                } else {
+                    Trust::System
+                },
+                trust_value: options
+                    .ca_file
+                    .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
+                fingerprint: options.fingerprint.map(|pin| pin.to_string()),
+            };
         }
+        app
     }
 
     fn focuses(&self) -> &'static [Focus] {
@@ -419,6 +577,7 @@ impl App {
             Focus::Trust => {
                 self.form.trust = self.form.trust.next();
                 self.form.trust_value.clear();
+                self.form.fingerprint = None;
                 Command::None
             }
             _ => Command::None,
@@ -498,9 +657,7 @@ impl App {
             Focus::User => Some(&mut self.form.user),
             Focus::Port => Some(&mut self.form.port),
             Focus::Size => Some(&mut self.form.size),
-            Focus::TrustValue if self.form.trust != Trust::System => {
-                Some(&mut self.form.trust_value)
-            }
+            Focus::TrustValue if self.form.trust == Trust::Ca => Some(&mut self.form.trust_value),
             _ => None,
         }
     }
@@ -624,16 +781,12 @@ impl App {
                 self.form.trust.label(),
                 self.focus == Focus::Trust,
             )?;
-            if self.form.trust != Trust::System {
+            if self.form.trust == Trust::Ca {
                 labeled(
                     out,
                     29,
                     21,
-                    if self.form.trust == Trust::Ca {
-                        "CA file"
-                    } else {
-                        "Fingerprint"
-                    },
+                    "CA file",
                     &self.form.trust_value,
                     self.focus == Focus::TrustValue,
                 )?;
@@ -720,6 +873,23 @@ fn labeled(
     line(out, x, y, label, false)?;
     field(out, x + 18, y, 28, value, focused)
 }
+fn detail(
+    out: &mut Stdout,
+    x: u16,
+    y: u16,
+    width: u16,
+    label: &str,
+    value: &str,
+) -> io::Result<()> {
+    let value_width = usize::from(width.saturating_sub(x + 16));
+    line(
+        out,
+        x,
+        y,
+        &format!("{label:<13}{}", fit(value, value_width)),
+        false,
+    )
+}
 fn button(out: &mut Stdout, x: u16, y: u16, label: &str, focused: bool) -> io::Result<()> {
     let value = format!("[ {label} ]");
     field(
@@ -782,7 +952,7 @@ mod tests {
     }
     #[test]
     fn keyboard_flow_builds_valid_cli_arguments() {
-        let mut app = App::new(Vec::new(), None);
+        let mut app = App::new(Vec::new(), None, None);
         complete(&mut app);
         app.focus = Focus::Connect;
         let Command::Connect(args) = app.key(key(KeyCode::Enter)) else {
@@ -794,7 +964,7 @@ mod tests {
     }
     #[test]
     fn save_and_confirmed_delete_are_distinct_actions() {
-        let mut app = App::new(Vec::new(), None);
+        let mut app = App::new(Vec::new(), None, None);
         complete(&mut app);
         app.focus = Focus::Save;
         app.key(key(KeyCode::Enter));
@@ -812,7 +982,7 @@ mod tests {
     }
     #[test]
     fn options_and_saved_profile_editing_are_keyboard_accessible() {
-        let mut app = App::new(Vec::new(), None);
+        let mut app = App::new(Vec::new(), None, None);
         complete(&mut app);
         app.focus = Focus::Options;
         app.key(key(KeyCode::Enter));
@@ -827,7 +997,7 @@ mod tests {
 
     #[test]
     fn editing_updates_existing_profile_and_space_edits_text() {
-        let mut app = App::new(Vec::new(), None);
+        let mut app = App::new(Vec::new(), None, None);
         complete(&mut app);
         app.focus = Focus::Save;
         app.key(key(KeyCode::Enter));
@@ -852,7 +1022,7 @@ mod tests {
 
     #[test]
     fn save_as_does_not_replace_profile_being_edited() {
-        let mut app = App::new(Vec::new(), None);
+        let mut app = App::new(Vec::new(), None, None);
         complete(&mut app);
         let original = app.form.profile("Work".into()).unwrap();
         app.profiles.push(original);
@@ -869,7 +1039,7 @@ mod tests {
 
     #[test]
     fn selected_saved_profile_remains_in_scrolled_view() {
-        let mut app = App::new(Vec::new(), None);
+        let mut app = App::new(Vec::new(), None, None);
         complete(&mut app);
         for index in 0..30 {
             app.profiles
@@ -894,7 +1064,7 @@ mod tests {
 
     #[test]
     fn deleting_while_editing_cannot_update_a_stale_index() {
-        let mut app = App::new(Vec::new(), None);
+        let mut app = App::new(Vec::new(), None, None);
         complete(&mut app);
         app.profiles.push(app.form.profile("First".into()).unwrap());
         app.profiles
@@ -915,7 +1085,7 @@ mod tests {
     #[test]
     fn control_u_clears_fields_and_profile_name_prompt() {
         let clear = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL);
-        let mut app = App::new(Vec::new(), None);
+        let mut app = App::new(Vec::new(), None, None);
         app.form.computer = "old host".into();
         assert_eq!(app.key(clear), Command::None);
         assert!(app.form.computer.is_empty());
@@ -928,5 +1098,61 @@ mod tests {
             app.modal,
             Some(Modal::Name { ref value, .. }) if value.is_empty()
         ));
+    }
+
+    #[test]
+    fn certificate_dialog_defaults_to_cancel_and_requires_a_choice() {
+        let mut dialog = CertificateDialog::default();
+        assert_eq!(
+            dialog.key(key(KeyCode::Enter)),
+            Some(CertificateChoice::Cancel)
+        );
+        assert_eq!(
+            dialog.key(key(KeyCode::Esc)),
+            Some(CertificateChoice::Cancel)
+        );
+        assert_eq!(dialog.key(key(KeyCode::Tab)), None);
+        assert_eq!(
+            dialog.key(key(KeyCode::Enter)),
+            Some(CertificateChoice::Once)
+        );
+        assert_eq!(dialog.key(key(KeyCode::Right)), None);
+        assert_eq!(
+            dialog.key(key(KeyCode::Enter)),
+            Some(CertificateChoice::Trust)
+        );
+    }
+
+    #[test]
+    fn resumed_connection_keeps_form_values_without_manual_pin_ui() {
+        let args = [
+            "connect",
+            "host.example",
+            "3390",
+            "--user",
+            "LAB\\tester",
+            "--size",
+            "1280x800",
+            "--dynamic-resolution",
+            "off",
+            "--clipboard",
+            "off",
+            "--ca",
+            "/tmp/Lab CA.pem",
+        ]
+        .map(str::to_owned);
+        let app = App::new(
+            Vec::new(),
+            Some("Certificate cancelled.".into()),
+            Some(&args),
+        );
+        assert_eq!(app.form.computer, "host.example");
+        assert_eq!(app.form.user, "LAB\\tester");
+        assert_eq!(app.form.port, "3390");
+        assert_eq!(app.form.size, "1280x800");
+        assert!(!app.form.dynamic);
+        assert!(!app.form.clipboard);
+        assert_eq!(app.form.trust, Trust::Ca);
+        assert_eq!(app.form.trust_value, "/tmp/Lab CA.pem");
     }
 }

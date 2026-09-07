@@ -26,7 +26,10 @@ keyboard-first connection screen. `linrdp tui` opens it explicitly. Enter a
 Computer and User, connect, or manage saved non-secret profiles; Options exposes
 port, initial size, dynamic resolution, clipboard, and certificate trust. Direct
 CLI commands remain available, and noninteractive no-argument use still prints
-help. See [terminal UI, profile storage, and launcher installation](docs/terminal-ui.md).
+help. For an unknown Windows certificate, the terminal interface can display its
+verified details and fingerprint before the password prompt, then connect once
+or save that exact trust decision. See
+[terminal UI, trust, profile storage, and launcher installation](docs/terminal-ui.md).
 
 ```sh
 cargo run --release -p linrdp -- connect my-computer.example --user 'MACHINE\tester' --ca /path/to/lab-ca.pem
