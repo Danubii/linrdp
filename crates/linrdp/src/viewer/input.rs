@@ -94,6 +94,14 @@ pub(super) struct Controller {
     wheel: f32,
 }
 impl Controller {
+    pub fn reset(&mut self) {
+        *self.queue.borrow_mut() = KeyQueue::default();
+        *self = Self {
+            queue: self.queue.clone(),
+            wayland: self.wayland,
+            ..Self::default()
+        };
+    }
     pub fn attach(window: &mut Window) -> Result<Self, &'static str> {
         let handle = window
             .window_handle()
@@ -408,6 +416,19 @@ mod tests {
         assert_eq!(out, [0, 0, 1, 2, 0, 0, 0, 0, 3, 4, 0, 0]);
     }
     #[test]
+    fn matching_remote_uses_the_full_native_window() {
+        let viewport = Viewport::new((1280, 720), (1280, 720));
+        assert_eq!(
+            (viewport.x, viewport.y, viewport.width, viewport.height),
+            (0, 0, 1280, 720)
+        );
+        assert_eq!(viewport.point((0., 0.), (1280, 720)), Some((0, 0)));
+        assert_eq!(
+            viewport.point((1279., 719.), (1280, 720)),
+            Some((1279, 719))
+        );
+    }
+    #[test]
     fn focus_loss_releases_and_regaining_focus_ignores_held_keys() {
         let mut c = Controller::default();
         c.sample(true, BTreeSet::new(), vec![], Some((1, 2)), [false; 3], 0.);
@@ -439,6 +460,47 @@ mod tests {
             )
             .is_empty()
         );
+    }
+    #[test]
+    fn epoch_reset_clears_overflow_and_ignores_held_inputs() {
+        let mut c = Controller {
+            focused: true,
+            keys: [Key::A].into(),
+            buttons: [true, false, false],
+            position: Some((5, 6)),
+            wheel: 60.,
+            ..Controller::default()
+        };
+        {
+            let mut queue = c.queue.borrow_mut();
+            queue.events.push((Key::A, false));
+            queue.overflow = true;
+        }
+
+        c.reset();
+
+        let queue = c.queue.borrow();
+        assert!(queue.events.is_empty());
+        assert!(!queue.overflow);
+        drop(queue);
+        assert!(!c.focused);
+        assert!(c.keys.is_empty());
+        assert_eq!(c.buttons, [false; 3]);
+        assert_eq!(c.position, None);
+        assert_eq!(c.wheel, 0.);
+        assert!(
+            c.sample(
+                true,
+                [Key::A].into(),
+                vec![],
+                Some((5, 6)),
+                [true, false, false],
+                0.,
+            )
+            .is_empty()
+        );
+        assert_eq!(c.ignored, [Key::A].into());
+        assert_eq!(c.ignored_buttons, [true, false, false]);
     }
     #[test]
     fn short_taps_and_drag_exit_produce_releases() {

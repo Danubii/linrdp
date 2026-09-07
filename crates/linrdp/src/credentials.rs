@@ -80,7 +80,7 @@ mod tests {
         let bytes = encode("", "æ", "🔑").unwrap();
         let outer = Credentials::from_der(&bytes).unwrap();
         let inner = Password::from_der(outer.credentials.as_bytes()).unwrap();
-        assert_eq!(inner.domain.as_bytes(), &[]);
+        assert!(inner.domain.as_bytes().is_empty());
         assert_eq!(inner.user.as_bytes(), &[0xe6, 0]);
         assert_eq!(inner.password.as_bytes(), &[0x3d, 0xd8, 0x11, 0xdd]);
     }

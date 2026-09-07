@@ -9,3 +9,5 @@ pub mod negotiation;
 
 pub mod channel;
 pub mod clipboard;
+
+pub mod display_control;

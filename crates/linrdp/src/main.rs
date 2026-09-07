@@ -2,8 +2,10 @@ mod clipboard;
 mod credentials;
 mod nla;
 mod ntlm;
+mod profiles;
 mod session;
 mod tls;
+mod tui;
 mod viewer;
 
 use std::io::{Read, Write};
@@ -21,7 +23,8 @@ Usage: linrdp probe <host> [port]
        linrdp nla-probe <host> [port] [trust-option]
        linrdp login <host> [port] --user <username|DOMAIN\\username> [trust-option]
        linrdp session-probe <host> [port] --user <username> [trust-option]
-       linrdp connect <host> [port] --user <username> [trust-option] [--size WIDTHxHEIGHT] [--clipboard on|off]
+       linrdp connect <host> [port] --user <username> [trust-option] [--size WIDTHxHEIGHT] [--dynamic-resolution on|off] [--clipboard on|off]
+       linrdp tui
        linrdp --help
        linrdp --version
 
@@ -32,14 +35,47 @@ nla-probe requests an NTLM challenge without credentials.
 login prompts locally for a hidden password after TLS verification, then
 attempts NTLM CredSSP once. session-probe continues with MCS/GCC and channel
 setup after login, then disconnects. connect opens an interactive desktop window.
-connect defaults to 1024x768 and clipboard on (Wayland text and file copy/paste).";
+connect defaults to 1024x768, dynamic resolution on, and clipboard on
+(Wayland text and file copy/paste). --size selects the initial dimensions;
+later window resizing uses Display Control when the server makes it available,
+with local scaling as the fallback. Only one monitor is supported.";
 
 fn main() -> ExitCode {
-    match run(std::env::args().skip(1).collect()) {
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    let wants_tui = starts_tui(&args, tui::interactive_terminal());
+    let result = if wants_tui {
+        if tui::interactive_terminal() {
+            run_tui()
+        } else {
+            Err("the terminal interface requires an interactive terminal".into())
+        }
+    } else {
+        run(args)
+    };
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("linrdp: {error}");
             ExitCode::FAILURE
+        }
+    }
+}
+
+fn starts_tui(args: &[String], interactive: bool) -> bool {
+    matches!(args, [command] if command == "tui") || (args.is_empty() && interactive)
+}
+
+fn run_tui() -> Result<(), Box<dyn std::error::Error>> {
+    let mut message = None;
+    loop {
+        match tui::run(message.take())? {
+            tui::Outcome::Quit => return Ok(()),
+            tui::Outcome::Connect(args) => {
+                message = Some(match run(args) {
+                    Ok(()) => "Disconnected. Choose a connection to continue.".into(),
+                    Err(error) => format!("Connection ended: {error}"),
+                });
+            }
         }
     }
 }
@@ -123,6 +159,7 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
                                     width: options.size.unwrap_or((1024, 768)).0,
                                     height: options.size.unwrap_or((1024, 768)).1,
                                     clipboard: options.clipboard,
+                                    dynamic_resolution: options.dynamic_resolution,
                                     ..Default::default()
                                 },
                             )?;
@@ -161,6 +198,7 @@ struct Options {
     view: bool,
     size: Option<(u16, u16)>,
     clipboard: bool,
+    dynamic_resolution: bool,
     user: Option<String>,
     host: String,
     port: u16,
@@ -188,6 +226,7 @@ impl Options {
             view: args[0] == "connect",
             size: None,
             clipboard: args[0] == "connect",
+            dynamic_resolution: args[0] == "connect",
             user: None,
             host: args[1].clone(),
             port: 3389,
@@ -206,6 +245,7 @@ impl Options {
             return Err("port must be between 1 and 65535".into());
         }
         let mut clipboard_set = false;
+        let mut dynamic_set = false;
         while !rest.is_empty() {
             if rest.len() < 2 {
                 return Err(format!("invalid arguments\n\n{HELP}").into());
@@ -226,6 +266,14 @@ impl Options {
                         return Err("resolution outside supported limits".into());
                     }
                     options.size = Some((w, h));
+                }
+                "--dynamic-resolution" if options.view && !dynamic_set => {
+                    options.dynamic_resolution = match value.as_str() {
+                        "on" => true,
+                        "off" => false,
+                        _ => return Err("dynamic-resolution must be on or off".into()),
+                    };
+                    dynamic_set = true;
                 }
                 "--clipboard" if options.view && !clipboard_set => {
                     options.clipboard = match value.as_str() {
@@ -379,6 +427,7 @@ mod tests {
                 view: false,
                 size: None,
                 clipboard: false,
+                dynamic_resolution: false,
                 user: None,
                 host: "::1".into(),
                 port: 3390,
@@ -466,16 +515,67 @@ mod tests {
         assert_eq!(options.user.as_deref(), Some("tester"));
     }
     #[test]
-    fn desktop_size_and_clipboard_options_are_bounded() {
+    fn desktop_options_have_documented_defaults_and_accept_explicit_values() {
         let parse = |extra: &[&str]| {
             let mut args = vec!["connect", "localhost", "--user", "tester"];
             args.extend(extra);
             Options::parse(&args.into_iter().map(str::to_owned).collect::<Vec<_>>())
         };
-        let options = parse(&["--size", "1920x1080", "--clipboard", "off"]).unwrap();
+        let defaults = parse(&[]).unwrap();
+        assert_eq!(defaults.size, None);
+        assert!(defaults.dynamic_resolution);
+        assert!(defaults.clipboard);
+
+        let options = parse(&[
+            "--size",
+            "1920x1080",
+            "--dynamic-resolution",
+            "off",
+            "--clipboard",
+            "off",
+        ])
+        .unwrap();
         assert_eq!(options.size, Some((1920, 1080)));
+        assert!(!options.dynamic_resolution);
         assert!(!options.clipboard);
-        assert!(parse(&[]).unwrap().clipboard);
+        assert!(
+            parse(&["--dynamic-resolution", "on"])
+                .unwrap()
+                .dynamic_resolution
+        );
+    }
+
+    #[test]
+    fn help_documents_dynamic_resolution_and_its_fallback() {
+        for text in [
+            "[--dynamic-resolution on|off]",
+            "dynamic resolution on",
+            "--size selects the initial dimensions",
+            "Display Control",
+            "local scaling as the fallback",
+            "Only one monitor is supported",
+        ] {
+            assert!(HELP.contains(text), "help is missing {text:?}");
+        }
+    }
+
+    #[test]
+    fn terminal_startup_preserves_noninteractive_and_explicit_cli_behavior() {
+        assert!(starts_tui(&[], true));
+        assert!(!starts_tui(&[], false));
+        assert!(starts_tui(&["tui".into()], true));
+        assert!(starts_tui(&["tui".into()], false));
+        assert!(!starts_tui(&["connect".into()], true));
+        assert!(!starts_tui(&["--help".into()], true));
+    }
+
+    #[test]
+    fn desktop_size_and_switch_options_are_bounded() {
+        let parse = |extra: &[&str]| {
+            let mut args = vec!["connect", "localhost", "--user", "tester"];
+            args.extend(extra);
+            Options::parse(&args.into_iter().map(str::to_owned).collect::<Vec<_>>())
+        };
         for size in [
             "0x768",
             "199x768",
@@ -487,7 +587,16 @@ mod tests {
         ] {
             assert!(parse(&["--size", size]).is_err());
         }
+        assert!(parse(&["--dynamic-resolution", "yes"]).is_err());
+        assert!(parse(&["--dynamic-resolution", "on", "--dynamic-resolution", "off"]).is_err());
         assert!(parse(&["--clipboard", "yes"]).is_err());
         assert!(parse(&["--clipboard", "on", "--clipboard", "off"]).is_err());
+
+        for args in [
+            ["probe", "localhost", "--dynamic-resolution", "off"],
+            ["tls", "localhost", "--dynamic-resolution", "off"],
+        ] {
+            assert!(Options::parse(&args.map(str::to_owned)).is_err());
+        }
     }
 }

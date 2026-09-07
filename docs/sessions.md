@@ -26,10 +26,17 @@ transport loss, authentication rejection and certificate changes. Do not retry
 password failures automatically. Reconnection cookies are secrets and must not
 be logged or stored as ordinary connection preferences.
 
+Dynamic resolution for the current single window and single monitor is
+implemented, defaults to on, and falls back to local scaling when Display Control
+is unavailable or cannot apply a requested size. A Windows-host check confirmed
+seven successive shrink, grow and restoration sizes through deactivation and
+reactivation. Keyboard and Unicode text clipboard checks also passed after the
+final resize; broader server compatibility remains under test.
+
 ## Later options
 
 - Tabs and multiple independent windows.
-- Fullscreen, dynamic resolution and selected local monitors.
+- Fullscreen and selected local monitors.
 - Saved connection profiles, with optional OS keyring credential storage.
 - RemoteApp where the server publishes applications.
 - Explicit administrative or session-sharing modes where supported and permitted.

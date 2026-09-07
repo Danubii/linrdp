@@ -266,8 +266,20 @@ project dependencies or public artifacts.
 ## Resolution, clipboard and shifted keys
 
 On 2026-09-06, the Windows host accepted requested desktop dimensions of
-1920×1080 and 1280×800 at 16-bit color. These are connection-time settings;
-local window resizing still scales rather than changing the remote resolution.
+1920×1080 and 1280×800 at 16-bit color. These were connection-time settings.
+Single-monitor dynamic resolution has since been implemented, with local scaling
+as its fallback. A later Windows-host run negotiated Display Control and changed
+the actual remote framebuffer through 960×1056, 860×1056, 1160×1056, 1024×768,
+1280×800, 900×600 and 1280×800. Each change was confirmed after the server
+deactivated and reactivated the desktop. The dynamic-channel transport required
+outgoing `drdynvc` fragments to omit `SHOW_PROTOCOL`; clipboard fragments
+continue to use it.
+
+After the final resize, Windows received keyboard input producing `aA`, Tab and
+`b`; copying it back yielded exactly `aA\tb`. Unicode multiline clipboard text
+also completed an exact Linux→Windows→Linux round trip, including
+`ÆØÅ/æøå`. File clipboard transfers were not repeated during this dynamic-
+resolution run; the earlier file evidence below remains valid and separate.
 
 Unicode clipboard text passed in both directions, including Danish characters
 and line breaks. A folder copied in Nautilus was pasted in Windows File Explorer,

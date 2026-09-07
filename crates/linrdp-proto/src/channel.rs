@@ -66,6 +66,22 @@ impl Channel {
     }
 }
 pub fn send(user: u16, channel: u16, message: &[u8]) -> Result<Vec<Vec<u8>>> {
+    send_with_protocol(user, channel, message, true)
+}
+/// DRDYNVC expects its command header first at the server application endpoint.
+/// Do not request forwarding of the enclosing static-channel header.
+pub fn send_dvc(user: u16, channel: u16, message: &[u8]) -> Result<Vec<Vec<u8>>> {
+    if message.len() > 1600 {
+        return Err(bad("DVC message exceeds transport limit"));
+    }
+    send_with_protocol(user, channel, message, false)
+}
+fn send_with_protocol(
+    user: u16,
+    channel: u16,
+    message: &[u8],
+    show_protocol: bool,
+) -> Result<Vec<Vec<u8>>> {
     if user < 1001 || channel < 1001 || message.is_empty() || message.len() > MAX_MESSAGE {
         return Err(bad("invalid outgoing channel message"));
     }
@@ -85,8 +101,10 @@ pub fn send(user: u16, channel: u16, message: &[u8]) -> Result<Vec<Vec<u8>>> {
         }
         p.extend((message.len() as u32).to_le_bytes());
         p.extend(
-            (0x10 | (if i == 0 { 1u32 } else { 0 }) | (if i + 1 == count { 2 } else { 0 }))
-                .to_le_bytes(),
+            ((if show_protocol { 0x10 } else { 0 })
+                | (if i == 0 { 1u32 } else { 0 })
+                | (if i + 1 == count { 2 } else { 0 }))
+            .to_le_bytes(),
         );
         p.extend(chunk);
         packets.push(p);

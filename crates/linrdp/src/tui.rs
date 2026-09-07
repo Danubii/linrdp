@@ -1,0 +1,932 @@
+//! Keyboard-first terminal connection launcher.
+use crate::profiles::{Profile, Store};
+use crossterm::{
+    cursor::{Hide, MoveTo, Show},
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    execute, queue,
+    style::{Attribute, Print, SetAttribute},
+    terminal::{
+        self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
+        enable_raw_mode,
+    },
+};
+use std::io::{self, IsTerminal, Stdout, Write};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+type Error = Box<dyn std::error::Error>;
+const MIN_WIDTH: u16 = 80;
+const MIN_HEIGHT: u16 = 24;
+
+pub enum Outcome {
+    Connect(Vec<String>),
+    Quit,
+}
+
+pub fn interactive_terminal() -> bool {
+    io::stdin().is_terminal() && io::stdout().is_terminal()
+}
+
+pub fn run(message: Option<String>) -> Result<Outcome, Error> {
+    let store = Store::discover()?;
+    let profiles = store.load()?;
+    let mut app = App::new(profiles, message);
+    let mut persisted = app.profiles.clone();
+    let mut terminal = Terminal::enter()?;
+    loop {
+        app.draw(&mut terminal.out)?;
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            continue;
+        }
+        match app.key(key) {
+            Command::None => {}
+            Command::Persist => match store.save(&app.profiles) {
+                Ok(()) => {
+                    persisted.clone_from(&app.profiles);
+                    app.status = "Saved connections updated.".into();
+                }
+                Err(error) => {
+                    app.profiles.clone_from(&persisted);
+                    app.selected = app.selected.min(app.profiles.len().saturating_sub(1));
+                    app.editing = None;
+                    app.status = format!("Could not save; no changes kept: {error}");
+                }
+            },
+            Command::Connect(arguments) => return Ok(Outcome::Connect(arguments)),
+            Command::Quit => return Ok(Outcome::Quit),
+        }
+    }
+}
+
+struct Terminal {
+    out: Stdout,
+    raw: bool,
+    alternate: bool,
+}
+
+impl Terminal {
+    fn enter() -> Result<Self, Error> {
+        enable_raw_mode()?;
+        let mut terminal = Self {
+            out: io::stdout(),
+            raw: true,
+            alternate: false,
+        };
+        execute!(terminal.out, EnterAlternateScreen)?;
+        terminal.alternate = true;
+        execute!(terminal.out, Hide)?;
+        Ok(terminal)
+    }
+}
+
+impl Drop for Terminal {
+    fn drop(&mut self) {
+        if self.alternate {
+            let _ = execute!(self.out, Show, LeaveAlternateScreen);
+        }
+        if self.raw {
+            let _ = disable_raw_mode();
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Focus {
+    Saved,
+    Computer,
+    User,
+    Connect,
+    Options,
+    Save,
+    SaveAs,
+    Edit,
+    Delete,
+    Port,
+    Size,
+    Dynamic,
+    Clipboard,
+    Trust,
+    TrustValue,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Trust {
+    System,
+    Ca,
+    Fingerprint,
+}
+
+impl Trust {
+    fn next(self) -> Self {
+        match self {
+            Self::System => Self::Ca,
+            Self::Ca => Self::Fingerprint,
+            Self::Fingerprint => Self::System,
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::System => "System trust",
+            Self::Ca => "CA file",
+            Self::Fingerprint => "Fingerprint",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct Form {
+    computer: String,
+    user: String,
+    port: String,
+    size: String,
+    dynamic: bool,
+    clipboard: bool,
+    trust: Trust,
+    trust_value: String,
+}
+
+impl Default for Form {
+    fn default() -> Self {
+        Self {
+            computer: String::new(),
+            user: String::new(),
+            port: "3389".into(),
+            size: "1024x768".into(),
+            dynamic: true,
+            clipboard: true,
+            trust: Trust::System,
+            trust_value: String::new(),
+        }
+    }
+}
+
+impl Form {
+    fn from_profile(profile: &Profile) -> Self {
+        let (trust, trust_value) = if let Some(path) = &profile.ca {
+            (Trust::Ca, path.clone())
+        } else if let Some(fingerprint) = &profile.fingerprint {
+            (Trust::Fingerprint, fingerprint.clone())
+        } else {
+            (Trust::System, String::new())
+        };
+        Self {
+            computer: profile.computer.clone(),
+            user: profile.user.clone(),
+            port: profile.port.to_string(),
+            size: profile.size.clone().unwrap_or_else(|| "1024x768".into()),
+            dynamic: profile.dynamic_resolution,
+            clipboard: profile.clipboard,
+            trust,
+            trust_value,
+        }
+    }
+
+    fn profile(&self, name: String) -> Result<Profile, Error> {
+        let port = self.port.parse()?;
+        let profile = Profile {
+            name,
+            computer: self.computer.trim().into(),
+            user: self.user.trim().into(),
+            port,
+            size: (!self.size.trim().is_empty()).then(|| self.size.trim().into()),
+            dynamic_resolution: self.dynamic,
+            clipboard: self.clipboard,
+            ca: (self.trust == Trust::Ca).then(|| self.trust_value.trim().into()),
+            fingerprint: (self.trust == Trust::Fingerprint).then(|| self.trust_value.trim().into()),
+        };
+        profile.validate()?;
+        Ok(profile)
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum Modal {
+    Name {
+        value: String,
+        replace: Option<usize>,
+    },
+    Delete,
+}
+
+struct App {
+    profiles: Vec<Profile>,
+    selected: usize,
+    form: Form,
+    focus: Focus,
+    advanced: bool,
+    status: String,
+    modal: Option<Modal>,
+    editing: Option<usize>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum Command {
+    None,
+    Persist,
+    Connect(Vec<String>),
+    Quit,
+}
+
+impl App {
+    fn new(profiles: Vec<Profile>, message: Option<String>) -> Self {
+        Self {
+            profiles,
+            selected: 0,
+            form: Form::default(),
+            focus: Focus::Computer,
+            advanced: false,
+            status: message
+                .unwrap_or_else(|| "Tab moves · Enter chooses · Ctrl+U clears · Esc quits".into()),
+            modal: None,
+            editing: None,
+        }
+    }
+
+    fn focuses(&self) -> &'static [Focus] {
+        const BASIC: &[Focus] = &[
+            Focus::Saved,
+            Focus::Computer,
+            Focus::User,
+            Focus::Connect,
+            Focus::Options,
+            Focus::Save,
+            Focus::SaveAs,
+            Focus::Edit,
+            Focus::Delete,
+        ];
+        const ADVANCED: &[Focus] = &[
+            Focus::Saved,
+            Focus::Computer,
+            Focus::User,
+            Focus::Connect,
+            Focus::Options,
+            Focus::Save,
+            Focus::SaveAs,
+            Focus::Edit,
+            Focus::Delete,
+            Focus::Port,
+            Focus::Size,
+            Focus::Dynamic,
+            Focus::Clipboard,
+            Focus::Trust,
+            Focus::TrustValue,
+        ];
+        if self.advanced { ADVANCED } else { BASIC }
+    }
+
+    fn move_focus(&mut self, backwards: bool) {
+        let fields = self.focuses();
+        let current = fields
+            .iter()
+            .position(|field| *field == self.focus)
+            .unwrap_or(0);
+        let next = if backwards {
+            current.checked_sub(1).unwrap_or(fields.len() - 1)
+        } else {
+            (current + 1) % fields.len()
+        };
+        self.focus = fields[next];
+    }
+
+    fn key(&mut self, key: KeyEvent) -> Command {
+        if let Some(modal) = self.modal.take() {
+            return self.modal_key(modal, key);
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            return Command::Quit;
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('u') {
+            if let Some(value) = self.active_text() {
+                value.clear();
+            }
+            return Command::None;
+        }
+        match key.code {
+            KeyCode::Esc => Command::Quit,
+            KeyCode::Tab => {
+                self.move_focus(key.modifiers.contains(KeyModifiers::SHIFT));
+                Command::None
+            }
+            KeyCode::BackTab => {
+                self.move_focus(true);
+                Command::None
+            }
+            KeyCode::Up if self.focus == Focus::Saved => {
+                self.selected = self.selected.saturating_sub(1);
+                Command::None
+            }
+            KeyCode::Down if self.focus == Focus::Saved => {
+                if self.selected + 1 < self.profiles.len() {
+                    self.selected += 1;
+                }
+                Command::None
+            }
+            KeyCode::Enter => self.activate(),
+            KeyCode::Char(' ') if self.active_text().is_none() => self.activate(),
+            KeyCode::Backspace => {
+                if let Some(value) = self.active_text() {
+                    value.pop();
+                }
+                Command::None
+            }
+            KeyCode::Char(character)
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                if let Some(value) = self.active_text()
+                    && value.len() < 1024
+                    && !character.is_control()
+                {
+                    value.push(character);
+                }
+                Command::None
+            }
+            _ => Command::None,
+        }
+    }
+
+    fn activate(&mut self) -> Command {
+        match self.focus {
+            Focus::Saved => {
+                if let Some(profile) = self.profiles.get(self.selected) {
+                    self.form = Form::from_profile(profile);
+                    self.editing = None;
+                    self.status = format!("Loaded {}.", profile.name);
+                    self.focus = Focus::Computer;
+                } else {
+                    self.status = "No saved connection selected.".into();
+                }
+                Command::None
+            }
+            Focus::Edit => {
+                if let Some(profile) = self.profiles.get(self.selected) {
+                    self.form = Form::from_profile(profile);
+                    self.editing = Some(self.selected);
+                    self.status = format!("Editing {}. Choose Save when finished.", profile.name);
+                    self.focus = Focus::Computer;
+                } else {
+                    self.status = "No saved connection selected.".into();
+                }
+                Command::None
+            }
+            Focus::Connect => match self.form.profile("Current connection".into()) {
+                Ok(profile) => Command::Connect(profile.arguments()),
+                Err(error) => {
+                    self.status = format!("Check connection details: {error}");
+                    Command::None
+                }
+            },
+            Focus::Options => {
+                self.advanced = !self.advanced;
+                Command::None
+            }
+            Focus::Save => {
+                self.modal = Some(Modal::Name {
+                    value: self
+                        .editing
+                        .and_then(|index| self.profiles.get(index))
+                        .map_or_else(String::new, |profile| profile.name.clone()),
+                    replace: self.editing,
+                });
+                Command::None
+            }
+            Focus::SaveAs => {
+                self.modal = Some(Modal::Name {
+                    value: String::new(),
+                    replace: None,
+                });
+                Command::None
+            }
+            Focus::Delete => {
+                if self.profiles.get(self.selected).is_some() {
+                    self.modal = Some(Modal::Delete);
+                } else {
+                    self.status = "No saved connection selected.".into();
+                }
+                Command::None
+            }
+            Focus::Dynamic => {
+                self.form.dynamic = !self.form.dynamic;
+                Command::None
+            }
+            Focus::Clipboard => {
+                self.form.clipboard = !self.form.clipboard;
+                Command::None
+            }
+            Focus::Trust => {
+                self.form.trust = self.form.trust.next();
+                self.form.trust_value.clear();
+                Command::None
+            }
+            _ => Command::None,
+        }
+    }
+
+    fn modal_key(&mut self, mut modal: Modal, key: KeyEvent) -> Command {
+        match (&mut modal, key.code) {
+            (_, KeyCode::Esc) => Command::None,
+            (Modal::Delete, KeyCode::Char('y') | KeyCode::Char('Y')) => {
+                self.profiles.remove(self.selected);
+                self.selected = self.selected.min(self.profiles.len().saturating_sub(1));
+                self.editing = None;
+                Command::Persist
+            }
+            (Modal::Delete, _) => {
+                self.modal = Some(modal);
+                Command::None
+            }
+            (Modal::Name { value, replace }, KeyCode::Enter) => {
+                let name = value.trim().to_owned();
+                match self.form.profile(name) {
+                    Ok(profile) => {
+                        if self.profiles.iter().enumerate().any(|(index, saved)| {
+                            Some(index) != *replace && saved.name == profile.name
+                        }) {
+                            self.status = "A saved connection already uses that name.".into();
+                            self.modal = Some(modal);
+                            return Command::None;
+                        }
+                        if let Some(index) = *replace {
+                            self.profiles[index] = profile;
+                            self.selected = index;
+                        } else {
+                            self.profiles.push(profile);
+                            self.selected = self.profiles.len() - 1;
+                        }
+                        self.editing = None;
+                        Command::Persist
+                    }
+                    Err(error) => {
+                        self.status = format!("Could not save: {error}");
+                        self.modal = Some(modal);
+                        Command::None
+                    }
+                }
+            }
+            (Modal::Name { value, .. }, KeyCode::Backspace) => {
+                value.pop();
+                self.modal = Some(modal);
+                Command::None
+            }
+            (Modal::Name { value, .. }, KeyCode::Char('u'))
+                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                value.clear();
+                self.modal = Some(modal);
+                Command::None
+            }
+            (Modal::Name { value, .. }, KeyCode::Char(character))
+                if value.len() < 1024 && !character.is_control() =>
+            {
+                value.push(character);
+                self.modal = Some(modal);
+                Command::None
+            }
+            (Modal::Name { .. }, _) => {
+                self.modal = Some(modal);
+                Command::None
+            }
+        }
+    }
+
+    fn active_text(&mut self) -> Option<&mut String> {
+        match self.focus {
+            Focus::Computer => Some(&mut self.form.computer),
+            Focus::User => Some(&mut self.form.user),
+            Focus::Port => Some(&mut self.form.port),
+            Focus::Size => Some(&mut self.form.size),
+            Focus::TrustValue if self.form.trust != Trust::System => {
+                Some(&mut self.form.trust_value)
+            }
+            _ => None,
+        }
+    }
+
+    fn draw(&self, out: &mut Stdout) -> io::Result<()> {
+        let (width, height) = terminal::size()?;
+        queue!(out, MoveTo(0, 0), Clear(ClearType::All))?;
+        if width < MIN_WIDTH || height < MIN_HEIGHT {
+            queue!(
+                out,
+                Print("LinRDP needs a terminal at least 80×24. Resize or press Esc.")
+            )?;
+            return out.flush();
+        }
+        line(out, 2, 1, "LinRDP  Remote Desktop Connection", true)?;
+        line(
+            out,
+            2,
+            2,
+            "Choose a saved computer or enter a new connection.",
+            false,
+        )?;
+        line(out, 2, 4, "Saved connections", true)?;
+        if self.profiles.is_empty() {
+            line(out, 3, 6, "No saved connections", false)?;
+        } else {
+            let (start, end) = self.visible_profiles(height);
+            for (row, index) in (start..end).enumerate() {
+                let profile = &self.profiles[index];
+                field(
+                    out,
+                    3,
+                    6 + row as u16,
+                    23,
+                    &profile.name,
+                    self.focus == Focus::Saved && self.selected == index,
+                )?;
+            }
+        }
+        line(out, 29, 4, "Connection", true)?;
+        labeled(
+            out,
+            29,
+            6,
+            "Computer",
+            &self.form.computer,
+            self.focus == Focus::Computer,
+        )?;
+        labeled(
+            out,
+            29,
+            8,
+            "User",
+            &self.form.user,
+            self.focus == Focus::User,
+        )?;
+        button(out, 29, 10, "Connect", self.focus == Focus::Connect)?;
+        button(
+            out,
+            41,
+            10,
+            if self.advanced {
+                "Hide options"
+            } else {
+                "Options"
+            },
+            self.focus == Focus::Options,
+        )?;
+        button(
+            out,
+            29,
+            12,
+            if self.editing.is_some() {
+                "Update"
+            } else {
+                "Save"
+            },
+            self.focus == Focus::Save,
+        )?;
+        button(out, 41, 12, "Save as", self.focus == Focus::SaveAs)?;
+        button(out, 55, 12, "Edit", self.focus == Focus::Edit)?;
+        button(out, 65, 12, "Delete", self.focus == Focus::Delete)?;
+        if self.advanced {
+            labeled(
+                out,
+                29,
+                14,
+                "Port",
+                &self.form.port,
+                self.focus == Focus::Port,
+            )?;
+            labeled(
+                out,
+                29,
+                16,
+                "Initial size",
+                &self.form.size,
+                self.focus == Focus::Size,
+            )?;
+            choice(
+                out,
+                29,
+                18,
+                "Dynamic resolution",
+                self.form.dynamic,
+                self.focus == Focus::Dynamic,
+            )?;
+            choice(
+                out,
+                58,
+                18,
+                "Clipboard",
+                self.form.clipboard,
+                self.focus == Focus::Clipboard,
+            )?;
+            labeled(
+                out,
+                29,
+                20,
+                "Trust",
+                self.form.trust.label(),
+                self.focus == Focus::Trust,
+            )?;
+            if self.form.trust != Trust::System {
+                labeled(
+                    out,
+                    29,
+                    21,
+                    if self.form.trust == Trust::Ca {
+                        "CA file"
+                    } else {
+                        "Fingerprint"
+                    },
+                    &self.form.trust_value,
+                    self.focus == Focus::TrustValue,
+                )?;
+            }
+        }
+        let status_y = height.saturating_sub(2);
+        line(
+            out,
+            2,
+            status_y,
+            &fit(&self.status, width.saturating_sub(4) as usize),
+            false,
+        )?;
+        if let Some(modal) = &self.modal {
+            let prompt = match modal {
+                Modal::Name { value, .. } => {
+                    format!("Save as: {value}_   Enter saves · Esc cancels")
+                }
+                Modal::Delete => format!(
+                    "Delete {}? Press y to confirm · Esc cancels",
+                    self.profiles[self.selected].name
+                ),
+            };
+            queue!(
+                out,
+                MoveTo(8, height / 2),
+                SetAttribute(Attribute::Reverse),
+                Print(fit(
+                    &format!(" {prompt} "),
+                    width.saturating_sub(16) as usize
+                )),
+                SetAttribute(Attribute::Reset)
+            )?;
+        }
+        out.flush()
+    }
+
+    fn visible_profiles(&self, height: u16) -> (usize, usize) {
+        let count = usize::from(height.saturating_sub(9)).max(1);
+        let start = if self.selected >= count {
+            self.selected + 1 - count
+        } else {
+            0
+        };
+        (start, (start + count).min(self.profiles.len()))
+    }
+}
+
+fn line(out: &mut Stdout, x: u16, y: u16, text: &str, bold: bool) -> io::Result<()> {
+    queue!(out, MoveTo(x, y))?;
+    if bold {
+        queue!(out, SetAttribute(Attribute::Bold))?;
+    }
+    queue!(out, Print(text), SetAttribute(Attribute::Reset))
+}
+fn field(
+    out: &mut Stdout,
+    x: u16,
+    y: u16,
+    width: usize,
+    value: &str,
+    focused: bool,
+) -> io::Result<()> {
+    queue!(out, MoveTo(x, y))?;
+    if focused {
+        queue!(out, SetAttribute(Attribute::Reverse))?;
+    }
+    let value = fit(value, width);
+    let padding = width.saturating_sub(UnicodeWidthStr::width(value.as_str()));
+    queue!(
+        out,
+        Print(format!(" {value}{} ", " ".repeat(padding))),
+        SetAttribute(Attribute::Reset)
+    )
+}
+fn labeled(
+    out: &mut Stdout,
+    x: u16,
+    y: u16,
+    label: &str,
+    value: &str,
+    focused: bool,
+) -> io::Result<()> {
+    line(out, x, y, label, false)?;
+    field(out, x + 18, y, 28, value, focused)
+}
+fn button(out: &mut Stdout, x: u16, y: u16, label: &str, focused: bool) -> io::Result<()> {
+    let value = format!("[ {label} ]");
+    field(
+        out,
+        x,
+        y,
+        UnicodeWidthStr::width(value.as_str()),
+        &value,
+        focused,
+    )
+}
+fn choice(
+    out: &mut Stdout,
+    x: u16,
+    y: u16,
+    label: &str,
+    enabled: bool,
+    focused: bool,
+) -> io::Result<()> {
+    field(
+        out,
+        x,
+        y,
+        label.len() + 7,
+        &format!("{label}: {}", if enabled { "On" } else { "Off" }),
+        focused,
+    )
+}
+fn fit(value: &str, width: usize) -> String {
+    if UnicodeWidthStr::width(value) <= width {
+        return value.into();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let target = width - 1;
+    let mut used = 0;
+    let mut text = String::new();
+    for character in value.chars() {
+        let cells = UnicodeWidthChar::width(character).unwrap_or(0);
+        if used + cells > target {
+            break;
+        }
+        used += cells;
+        text.push(character);
+    }
+    text.push('…');
+    text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+    fn complete(app: &mut App) {
+        app.form.computer = "host.example".into();
+        app.form.user = "tester".into();
+    }
+    #[test]
+    fn keyboard_flow_builds_valid_cli_arguments() {
+        let mut app = App::new(Vec::new(), None);
+        complete(&mut app);
+        app.focus = Focus::Connect;
+        let Command::Connect(args) = app.key(key(KeyCode::Enter)) else {
+            panic!()
+        };
+        let options = crate::Options::parse(&args).unwrap();
+        assert_eq!(options.host, "host.example");
+        assert!(options.dynamic_resolution && options.clipboard);
+    }
+    #[test]
+    fn save_and_confirmed_delete_are_distinct_actions() {
+        let mut app = App::new(Vec::new(), None);
+        complete(&mut app);
+        app.focus = Focus::Save;
+        app.key(key(KeyCode::Enter));
+        for character in "Work".chars() {
+            app.key(key(KeyCode::Char(character)));
+        }
+        assert_eq!(app.key(key(KeyCode::Enter)), Command::Persist);
+        assert_eq!(app.profiles.len(), 1);
+        app.focus = Focus::Delete;
+        app.key(key(KeyCode::Enter));
+        app.key(key(KeyCode::Char('n')));
+        assert_eq!(app.profiles.len(), 1);
+        assert_eq!(app.key(key(KeyCode::Char('y'))), Command::Persist);
+        assert!(app.profiles.is_empty());
+    }
+    #[test]
+    fn options_and_saved_profile_editing_are_keyboard_accessible() {
+        let mut app = App::new(Vec::new(), None);
+        complete(&mut app);
+        app.focus = Focus::Options;
+        app.key(key(KeyCode::Enter));
+        assert!(app.advanced);
+        app.focus = Focus::Dynamic;
+        app.key(key(KeyCode::Enter));
+        assert!(!app.form.dynamic);
+        app.focus = Focus::Trust;
+        app.key(key(KeyCode::Enter));
+        assert_eq!(app.form.trust, Trust::Ca);
+    }
+
+    #[test]
+    fn editing_updates_existing_profile_and_space_edits_text() {
+        let mut app = App::new(Vec::new(), None);
+        complete(&mut app);
+        app.focus = Focus::Save;
+        app.key(key(KeyCode::Enter));
+        for character in "Work".chars() {
+            app.key(key(KeyCode::Char(character)));
+        }
+        assert_eq!(app.key(key(KeyCode::Enter)), Command::Persist);
+
+        app.focus = Focus::Edit;
+        app.key(key(KeyCode::Enter));
+        assert_eq!(app.editing, Some(0));
+        app.focus = Focus::User;
+        app.key(key(KeyCode::Char(' ')));
+        app.key(key(KeyCode::Char('x')));
+        assert_eq!(app.form.user, "tester x");
+        app.focus = Focus::Save;
+        app.key(key(KeyCode::Enter));
+        assert_eq!(app.key(key(KeyCode::Enter)), Command::Persist);
+        assert_eq!(app.profiles.len(), 1);
+        assert_eq!(app.profiles[0].user, "tester x");
+    }
+
+    #[test]
+    fn save_as_does_not_replace_profile_being_edited() {
+        let mut app = App::new(Vec::new(), None);
+        complete(&mut app);
+        let original = app.form.profile("Work".into()).unwrap();
+        app.profiles.push(original);
+        app.editing = Some(0);
+        app.focus = Focus::SaveAs;
+        app.key(key(KeyCode::Enter));
+        for character in "Copy".chars() {
+            app.key(key(KeyCode::Char(character)));
+        }
+        assert_eq!(app.key(key(KeyCode::Enter)), Command::Persist);
+        assert_eq!(app.profiles.len(), 2);
+        assert_eq!(app.profiles[1].name, "Copy");
+    }
+
+    #[test]
+    fn selected_saved_profile_remains_in_scrolled_view() {
+        let mut app = App::new(Vec::new(), None);
+        complete(&mut app);
+        for index in 0..30 {
+            app.profiles
+                .push(app.form.profile(format!("Computer {index}")).unwrap());
+        }
+        app.selected = 29;
+        let (start, end) = app.visible_profiles(MIN_HEIGHT);
+        assert!(start <= app.selected && app.selected < end);
+        assert_eq!(end - start, usize::from(MIN_HEIGHT - 9));
+    }
+
+    #[test]
+    fn minimum_layout_and_wide_text_stay_within_terminal_cells() {
+        // The rightmost control ends before column 80; advanced content ends on
+        // row 21 and leaves row 22 for status in a 24-row terminal.
+        assert!(65 + "[ Delete ]".width() + 2 <= usize::from(MIN_WIDTH));
+        assert!(21 < usize::from(MIN_HEIGHT - 2));
+        let clipped = fit("電腦名前", 5);
+        assert!(clipped.width() <= 5);
+        assert!(clipped.ends_with('…'));
+    }
+
+    #[test]
+    fn deleting_while_editing_cannot_update_a_stale_index() {
+        let mut app = App::new(Vec::new(), None);
+        complete(&mut app);
+        app.profiles.push(app.form.profile("First".into()).unwrap());
+        app.profiles
+            .push(app.form.profile("Second".into()).unwrap());
+        app.selected = 1;
+        app.focus = Focus::Edit;
+        app.key(key(KeyCode::Enter));
+        assert_eq!(app.editing, Some(1));
+        app.focus = Focus::Delete;
+        app.key(key(KeyCode::Enter));
+        assert_eq!(app.key(key(KeyCode::Char('y'))), Command::Persist);
+        assert_eq!(app.editing, None);
+        app.focus = Focus::Save;
+        app.key(key(KeyCode::Enter));
+        assert!(matches!(app.modal, Some(Modal::Name { replace: None, .. })));
+    }
+
+    #[test]
+    fn control_u_clears_fields_and_profile_name_prompt() {
+        let clear = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL);
+        let mut app = App::new(Vec::new(), None);
+        app.form.computer = "old host".into();
+        assert_eq!(app.key(clear), Command::None);
+        assert!(app.form.computer.is_empty());
+        complete(&mut app);
+        app.focus = Focus::Save;
+        app.key(key(KeyCode::Enter));
+        app.key(key(KeyCode::Char('x')));
+        app.key(clear);
+        assert!(matches!(
+            app.modal,
+            Some(Modal::Name { ref value, .. }) if value.is_empty()
+        ));
+    }
+}

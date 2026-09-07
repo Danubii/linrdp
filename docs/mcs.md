@@ -24,13 +24,15 @@ the assigned user and I/O channels in sequence. Every confirmation must match
 the expected user and channel. Rejection, truncation or mismatch ends the probe
 without advancing to the next request. User and I/O channels must be distinct.
 
-The shared setup code also supports one explicitly requested `cliprdr` channel
-for `connect`, joining it after the user and I/O channels. A returned channel
-that was not requested, a missing requested channel, or duplicate channel IDs
-are rejected. `connect --size WIDTHxHEIGHT` supplies its chosen initial geometry.
-The diagnostic keeps its fixed profile.
+The shared setup code also supports explicitly requested `cliprdr` and `drdynvc`
+static channels for `connect`, joining them after the user and I/O channels.
+`drdynvc` carries the single-monitor Display Control endpoint used for later
+window-size changes. A returned channel that was not requested, a missing
+requested channel, or duplicate channel IDs are rejected. `connect --size
+WIDTHxHEIGHT` supplies its chosen initial geometry. The diagnostic keeps its
+fixed profile and requests neither static channel.
 
-Current limits: only core, security and zero/one-static-channel network response
+Current limits: only core, security and zero-to-two-static-channel network response
 blocks are supported; unknown blocks are rejected. Fragmented PER lengths,
 channel-join skipping and legacy RDP security are unsupported. This diagnostic
 does not send Client Info, process licensing, negotiate capabilities, activate

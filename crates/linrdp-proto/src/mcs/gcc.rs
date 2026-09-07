@@ -12,14 +12,18 @@ fn per_length(out: &mut Vec<u8>, value: usize) {
 }
 
 pub(super) fn request(settings: Settings, protocol: SecurityProtocol) -> Vec<u8> {
-    let mut core = vec![0; 216];
-    core[..4].copy_from_slice(&[1, 0xc0, 216, 0]);
+    let core_length = if settings.dynamic_resolution {
+        234
+    } else {
+        216
+    };
+    let mut core = vec![0; core_length];
+    core[..4].copy_from_slice(&[1, 0xc0, core_length as u8, 0]);
     core[4..8].copy_from_slice(&0x00080004u32.to_le_bytes());
     core[8..10].copy_from_slice(&settings.width.to_le_bytes());
     core[10..12].copy_from_slice(&settings.height.to_le_bytes());
     core[12..16].copy_from_slice(&[1, 0xca, 3, 0xaa]);
     core[16..20].copy_from_slice(&settings.keyboard_layout.to_le_bytes());
-    // Product build is our initial diagnostic build, not an impersonated OS.
     core[20..24].copy_from_slice(&1u32.to_le_bytes());
     for (i, ch) in "LinRDP".encode_utf16().enumerate() {
         core[24 + 2 * i..26 + 2 * i].copy_from_slice(&ch.to_le_bytes());
@@ -28,21 +32,34 @@ pub(super) fn request(settings: Settings, protocol: SecurityProtocol) -> Vec<u8>
     core[64..68].copy_from_slice(&12u32.to_le_bytes());
     core[132..136].copy_from_slice(&[1, 0xca, 1, 0]);
     core[140..144].copy_from_slice(&[16, 0, 2, 0]); // 16-bit color only
-    core[144] = 5; // RNS_UD_CS_SUPPORT_ERRINFO_PDU | SUPPORT_STATUSINFO_PDU
+    core[144] = 5 | if settings.dynamic_resolution { 0x40 } else { 0 }; // RNS_UD_CS_SUPPORT_ERRINFO_PDU | SUPPORT_STATUSINFO_PDU
     let selected: u32 = match protocol {
         SecurityProtocol::Tls => 1,
         SecurityProtocol::CredSsp => 2,
         SecurityProtocol::CredSspEarlyAuth => 8,
     };
     core[212..216].copy_from_slice(&selected.to_le_bytes());
+    if settings.dynamic_resolution {
+        // The extended RDP 8.1 core fields advertise 100% desktop/device scale.
+        // Zero physical dimensions mean unknown, per MS-RDPBCGR 2.2.1.3.2.
+        core[226..230].copy_from_slice(&100u32.to_le_bytes());
+        core[230..234].copy_from_slice(&100u32.to_le_bytes());
+    }
     // TLS provides encryption; zero legacy encryption methods.
     core.extend_from_slice(&[2, 0xc0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-    if settings.clipboard {
-        core.extend_from_slice(&[3, 0xc0, 20, 0, 1, 0, 0, 0]);
-        core.extend_from_slice(b"cliprdr\0");
-        core.extend_from_slice(&0xc0000000u32.to_le_bytes()); // initialized, encrypt under legacy security
-    } else {
-        core.extend_from_slice(&[3, 0xc0, 8, 0, 0, 0, 0, 0]);
+    let names: Vec<_> = [
+        (settings.clipboard, b"cliprdr\0"),
+        (settings.dynamic_resolution, b"drdynvc\0"),
+    ]
+    .into_iter()
+    .filter_map(|(enabled, name)| enabled.then_some(name))
+    .collect();
+    core.extend_from_slice(&[3, 0xc0]);
+    core.extend_from_slice(&(8u16 + 12 * names.len() as u16).to_le_bytes());
+    core.extend_from_slice(&(names.len() as u32).to_le_bytes());
+    for name in names {
+        core.extend_from_slice(name);
+        core.extend_from_slice(&0xc0000000u32.to_le_bytes());
     }
     let mut conference = vec![0, 8, 0, 0x10, 0, 1, 0xc0, 0];
     conference.extend_from_slice(b"Duca");
@@ -79,7 +96,7 @@ fn server_blocks(bytes: &[u8], requested: u32) -> Result<ServerSettings, Error> 
     let mut core = None;
     let mut security = false;
     let mut network = None;
-    let mut clipboard_channel = None;
+    let mut static_channels = [None; 2];
     while !r.0.is_empty() {
         let kind = r.le16()?;
         let length = usize::from(r.le16()?)
@@ -118,16 +135,18 @@ fn server_blocks(bytes: &[u8], requested: u32) -> Result<ServerSettings, Error> 
                 }
                 let channel = block.le16()?;
                 let count = block.le16()?;
-                if channel < 1001 || count > 1 || length != if count == 0 { 4 } else { 8 } {
+                if channel < 1001 || count > 2 || length != if count == 0 { 4 } else { 8 } {
                     return Err(Error("invalid server channel assignment"));
                 }
-                if count == 1 {
-                    let clip = block.le16()?;
-                    if clip < 1001 || clip == channel {
-                        return Err(Error("invalid clipboard channel"));
+                for index in 0..usize::from(count) {
+                    let id = block.le16()?;
+                    if id < 1001 || id == channel || static_channels.contains(&Some(id)) {
+                        return Err(Error("invalid static channel assignment"));
                     }
-                    clipboard_channel = Some(clip);
-                    block.le16()?; // odd channel count padding
+                    static_channels[index] = Some(id);
+                }
+                if count % 2 == 1 {
+                    block.le16()?;
                 }
                 network = Some(channel);
             }
@@ -143,6 +162,6 @@ fn server_blocks(bytes: &[u8], requested: u32) -> Result<ServerSettings, Error> 
         version,
         early_capability_flags,
         io_channel: network.ok_or(Error("missing server network"))?,
-        clipboard_channel,
+        static_channels,
     })
 }

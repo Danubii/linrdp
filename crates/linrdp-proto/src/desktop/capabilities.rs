@@ -110,6 +110,8 @@ pub(super) fn confirm(user: u16, server: u16, d: Demand) -> Result<Vec<u8>> {
     add(13, &input);
     add(14, &[1, 0, 0, 0]); // font list
     add(15, &[0; 4]); // no brush support
+    // Static virtual channels use the default 1600-byte chunks without compression.
+    add(20, &[0, 0, 0, 0, 0x40, 0x06, 0, 0]);
     let mut b = Vec::new();
     u32le(&mut b, d.share);
     u16le(&mut b, server);

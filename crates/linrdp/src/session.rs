@@ -60,8 +60,10 @@ fn setup(
 ) -> Result<(mcs::ServerSettings, u16), Error> {
     transport.send(&mcs::connect_initial(settings, protocol)?)?;
     let server = mcs::connect_response(&transport.receive()?, 0x0b)?;
-    if settings.clipboard != server.clipboard_channel.is_some() {
-        return Err("server clipboard channel mismatch".into());
+    if usize::from(settings.clipboard) + usize::from(settings.dynamic_resolution)
+        != server.static_channels.iter().flatten().count()
+    {
+        return Err("server static channel count mismatch".into());
     }
     transport.send(mcs::ERECT_DOMAIN)?;
     transport.send(mcs::ATTACH_USER)?;
@@ -69,13 +71,14 @@ fn setup(
     if user == server.io_channel {
         return Err("server assigned the same user and I/O channel".into());
     }
-    if server.clipboard_channel == Some(user) {
-        return Err("clipboard channel overlaps user channel".into());
+    if server.static_channels.contains(&Some(user)) {
+        return Err("static channel overlaps user channel".into());
     }
     for channel in [
         Some(user),
         Some(server.io_channel),
-        server.clipboard_channel,
+        server.static_channels[0],
+        server.static_channels[1],
     ]
     .into_iter()
     .flatten()
@@ -191,7 +194,7 @@ mod tests {
             ..Default::default()
         };
         let (server, _) = setup(&mut p, SecurityProtocol::CredSspEarlyAuth, settings).unwrap();
-        assert_eq!(server.clipboard_channel, Some(1004));
+        assert_eq!(server.static_channels, [Some(1004), None]);
         assert_eq!(p.sent.last().unwrap(), &[0x38, 0, 6, 3, 0xec]);
         let mut p = peer();
         p.replies[0] = response;
@@ -207,5 +210,40 @@ mod tests {
         let mut p = peer();
         assert!(setup(&mut p, SecurityProtocol::CredSspEarlyAuth, settings).is_err());
         assert_eq!(p.sent.len(), 1);
+    }
+    #[test]
+    fn dynamic_transport_is_joined_with_or_without_clipboard() {
+        for clipboard in [false, true] {
+            let mut p = peer();
+            let packet = &mut p.replies[0];
+            // Both one channel plus padding and two channels add four bytes.
+            packet[2] += 4;
+            let data = packet.windows(4).position(|b| b == b"McDn").unwrap();
+            packet[data + 4] += 4;
+            let n = packet.len();
+            packet[n - 6] = 12;
+            packet[n - 2] = 1 + u8::from(clipboard);
+            packet.extend([0xec, 3]);
+            packet.extend(if clipboard { [0xed, 3] } else { [0, 0] });
+            p.replies.push_back(vec![0x3e, 0, 0, 6, 3, 0xec, 3, 0xec]);
+            if clipboard {
+                p.replies.push_back(vec![0x3e, 0, 0, 6, 3, 0xed, 3, 0xed]);
+            }
+            let settings = mcs::Settings {
+                clipboard,
+                dynamic_resolution: true,
+                ..Default::default()
+            };
+            let (server, _) = setup(&mut p, SecurityProtocol::CredSsp, settings).unwrap();
+            assert_eq!(
+                server.static_channels[usize::from(clipboard)],
+                Some(if clipboard { 1005 } else { 1004 })
+            );
+            assert!(p.replies.is_empty());
+            assert_eq!(p.sent[5], [0x38, 0, 6, 3, 0xec]);
+            if clipboard {
+                assert_eq!(p.sent[6], [0x38, 0, 6, 3, 0xed]);
+            }
+        }
     }
 }

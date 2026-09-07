@@ -116,21 +116,13 @@ impl Session {
 
     /// Decode one complete MCS SendDataIndication and return outbound MCS PDUs.
     pub fn receive(&mut self, payload: &[u8]) -> Result<Vec<Vec<u8>>> {
-        let mut r = Cursor(payload);
-        if r.0.first() == Some(&0x21) {
+        if payload.first() == Some(&0x21) {
             return Err(bad("server disconnected the RDP session"));
         }
-        r.expect(&[0x68])?;
-        r.be16()?
-            .checked_add(1001)
-            .ok_or_else(|| bad("server user ID overflow"))?;
-        if r.be16()? != self.channel {
+        let (channel, data) = crate::channel::indication(payload)?;
+        if channel != self.channel {
             return Err(bad("unexpected MCS channel"));
         }
-        r.expect(&[0x70])?; // high priority, unsegmented
-        let length = r.per_length()?;
-        let data = r.take(length)?;
-        r.end()?;
         if self.phase == Phase::Licensing {
             license_valid_client(data)?;
             self.phase = Phase::DemandActive;
@@ -211,7 +203,7 @@ impl Session {
         if !matches!(self.phase, Phase::Finalizing | Phase::Active) {
             return Err(bad("data before activation"));
         }
-        if source != self.server || r.u32()? != self.share {
+        if r.u32()? != self.share {
             return Err(bad("Share Data session mismatch"));
         }
         r.take(2)?; // padding, stream priority
@@ -220,7 +212,47 @@ impl Session {
         if r.byte()? != 0 || r.u16()? != 0 {
             return Err(bad("server sent unnegotiated bulk compression"));
         }
+        // Set Error Info and Monitor Layout explicitly require a zero source.
+        if source != self.server && !(matches!(kind, 47 | 55) && source == 0) {
+            return Err(bad("Share Data source mismatch"));
+        }
         match kind {
+            55 => {
+                let count = r.u32()? as usize;
+                if !(1..=16).contains(&count) || r.0.len() != count * 20 {
+                    return Err(bad("invalid monitor layout count or length"));
+                }
+                let mut primary = 0;
+                let (mut min_x, mut min_y, mut max_x, mut max_y) =
+                    (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+                for _ in 0..count {
+                    let (left, top, right, bottom) = (
+                        r.u32()? as i32,
+                        r.u32()? as i32,
+                        r.u32()? as i32,
+                        r.u32()? as i32,
+                    );
+                    let flags = r.u32()?;
+                    if right < left || bottom < top || flags & !1 != 0 {
+                        return Err(bad("invalid monitor rectangle"));
+                    }
+                    if flags == 1 {
+                        if left != 0 || top != 0 {
+                            return Err(bad("primary monitor origin is not zero"));
+                        }
+                        primary += 1;
+                    }
+                    min_x = min_x.min(left);
+                    min_y = min_y.min(top);
+                    max_x = max_x.max(right);
+                    max_y = max_y.max(bottom);
+                }
+                let width = i64::from(max_x) - i64::from(min_x) + 1;
+                let height = i64::from(max_y) - i64::from(min_y) + 1;
+                if primary != 1 || width > 8192 || height > 8192 || width * height > 16_777_216 {
+                    return Err(bad("monitor layout exceeds display limits"));
+                }
+            }
             31 => {
                 r.expect(&[1, 0])?;
                 r.u16()?;
@@ -424,9 +456,7 @@ impl<'a> Cursor<'a> {
     fn u16(&mut self) -> Result<u16> {
         Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
     }
-    fn be16(&mut self) -> Result<u16> {
-        Ok(u16::from_be_bytes(self.take(2)?.try_into().unwrap()))
-    }
+
     fn u32(&mut self) -> Result<u32> {
         Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
@@ -443,16 +473,6 @@ impl<'a> Cursor<'a> {
         } else {
             Err(bad("trailing RDP desktop data"))
         }
-    }
-    fn per_length(&mut self) -> Result<usize> {
-        let b = self.byte()?;
-        if b < 128 {
-            return Ok(usize::from(b));
-        }
-        if b & 0x40 != 0 {
-            return Err(bad("fragmented MCS payload unsupported"));
-        }
-        Ok((usize::from(b & 63) << 8) | usize::from(self.byte()?))
     }
 }
 
@@ -499,6 +519,11 @@ mod tests {
         assert_eq!(s.phase, Phase::DemandActive);
         let replies = s.receive(&demand()).unwrap();
         assert_eq!(replies.len(), 5);
+        assert!(
+            replies[0]
+                .windows(12)
+                .any(|bytes| bytes == [20, 0, 12, 0, 0, 0, 0, 0, 0x40, 6, 0, 0])
+        );
         assert_eq!(s.phase, Phase::Finalizing);
         s.receive(&server_data(31, &[1, 0, 0xec, 3])).unwrap();
         s.receive(&server_data(20, &[4, 0, 0, 0, 0, 0, 0, 0]))
@@ -583,6 +608,106 @@ mod tests {
         assert!(
             s.client_info("D", "a\0b", "P", "::1".parse().unwrap())
                 .is_err()
+        );
+    }
+    #[test]
+    fn monitor_layout_accepts_zero_source_but_preserves_share_binding() {
+        let mut state = licensed();
+        state.receive(&demand()).unwrap();
+        let body: Vec<_> = [1u32, 0, 0, 1279, 799, 1]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect();
+        let mut packet = server_data(55, &body);
+        // This small MCS indication has a seven-byte header. Share Control
+        // source is allowed to be zero specifically for Monitor Layout.
+        packet[11..13].fill(0);
+        state.receive(&packet).unwrap();
+        assert_eq!(
+            (state.framebuffer.width, state.framebuffer.height),
+            (1024, 768)
+        );
+        let mut wrong_share = packet.clone();
+        wrong_share[13] ^= 1;
+        assert!(state.receive(&wrong_share).is_err());
+        packet[21] = 31;
+        assert!(state.receive(&packet).is_err());
+    }
+    #[test]
+    fn malformed_monitor_layout_does_not_change_framebuffer() {
+        for values in [
+            vec![0u32],
+            vec![1, 0, 0, 1279, 799, 0],
+            vec![1, 1, 0, 1279, 799, 1],
+            vec![1, 0, 0, u32::MAX, 799, 1],
+            vec![1, 0, 0, 8192, 799, 1],
+            vec![1, 0, 0, 8191, 8191, 1],
+            vec![1, 0, 0, 1279, 799, 2],
+        ] {
+            let mut state = licensed();
+            state.receive(&demand()).unwrap();
+            let body: Vec<_> = values.into_iter().flat_map(u32::to_le_bytes).collect();
+            assert!(state.receive(&server_data(55, &body)).is_err());
+            assert_eq!(
+                (state.framebuffer.width, state.framebuffer.height),
+                (1024, 768)
+            );
+        }
+    }
+    #[test]
+    fn reactivation_replaces_dimensions_and_requires_a_new_frame() {
+        let mut state = licensed();
+        state.receive(&demand()).unwrap();
+        state.receive(&server_data(31, &[1, 0, 0xec, 3])).unwrap();
+        state
+            .receive(&server_data(20, &[4, 0, 0, 0, 0, 0, 0, 0]))
+            .unwrap();
+        state
+            .receive(&server_data(20, &[2, 0, 0xec, 3, 0, 0, 0, 0]))
+            .unwrap();
+        state
+            .receive(&server_data(40, &[0, 0, 0, 0, 3, 0, 4, 0]))
+            .unwrap();
+        assert_eq!(state.phase, Phase::Active);
+        state.framebuffer.updates = 3;
+        state
+            .input(&[Input::Key {
+                code: 0x2a,
+                extended: false,
+                down: true,
+            }])
+            .unwrap();
+        let deactivate = share_control(1002, 6, &[0xea, 3, 1, 0, 0, 0]).unwrap();
+        state.receive(&indication(&deactivate)).unwrap();
+        assert_eq!(state.phase, Phase::Deactivated);
+        assert!(
+            state
+                .input(&[Input::Move { x: 10, y: 10 }])
+                .unwrap()
+                .is_none()
+        );
+        let mut resized = demand();
+        let caps = resized.windows(4).position(|b| b == [2, 0, 28, 0]).unwrap();
+        resized[caps + 12..caps + 14].copy_from_slice(&1280u16.to_le_bytes());
+        resized[caps + 14..caps + 16].copy_from_slice(&800u16.to_le_bytes());
+        state.receive(&resized).unwrap();
+        assert_eq!(state.phase, Phase::Finalizing);
+        assert_eq!(
+            (state.framebuffer.width, state.framebuffer.height),
+            (1280, 800)
+        );
+        assert_eq!(state.framebuffer.updates, 0);
+        assert!(state.input(&[Input::ReleaseAll]).unwrap().is_none());
+    }
+    #[test]
+    fn zero_source_set_error_info_reports_the_server_reason() {
+        let mut state = licensed();
+        state.receive(&demand()).unwrap();
+        let mut packet = server_data(47, &1u32.to_le_bytes());
+        packet[11..13].fill(0);
+        assert_eq!(
+            state.receive(&packet).unwrap_err().to_string(),
+            "server RDP error 0x00000001"
         );
     }
 }

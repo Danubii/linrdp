@@ -11,8 +11,29 @@ The initial profile requests 1024×768 at 16 bits per pixel by default.
 16-million-pixel budget. Windows has accepted both 1920×1080 and 1280×800. The decoder supports
 raw bottom-up RGB565 bitmaps with row padding and interleaved RLE bitmaps, with
 and without compression headers. The server controls the negotiated dimensions
-within a bounded 16-million-pixel budget. Window resizing scales the existing
-framebuffer in a centered viewport while preserving its aspect ratio; it does not renegotiate the remote resolution.
+within a bounded 16-million-pixel budget.
+
+Dynamic resolution is implemented for one monitor and defaults to on. Use
+`--dynamic-resolution on|off` to select it explicitly; `--size` still controls
+the initial connection dimensions. When enabled, LinRDP negotiates the Display
+Control dynamic virtual channel and, after an activated desktop has painted,
+coalesces window changes for 300 ms before requesting the latest size. Requests
+are limited to 200–8192 pixels per dimension, the server-advertised display area,
+and LinRDP's 16,777,216-pixel cap. Odd window widths round down to the even width
+required by the protocol. Only one request is outstanding at a time.
+
+The centered, aspect-preserving local scaler remains active throughout. It is
+the fallback when dynamic resolution is disabled, the server does not make the
+channel available, the window size is outside the negotiated limits, or a remote
+change is not confirmed within five seconds. The implementation and synthetic
+protocol behavior are tested locally. A Windows-host check confirmed this remote
+framebuffer sequence: 960×1056, 860×1056, 1160×1056, 1024×768, 1280×800,
+900×600 and 1280×800. Every change completed deactivation/reactivation and was
+confirmed by the resulting remote dimensions. After the final resize, keyboard
+input produced exact `aA\tb` text and Unicode multiline clipboard text made an
+exact Linux→Windows→Linux round trip, including `ÆØÅ/æøå`. Clipboard file
+transfer was not repeated in this run; its earlier evidence remains separate.
+Other Windows versions and RDP servers remain compatibility work.
 
 The client requires successful licensing, Demand Active, server synchronization,
 control cooperation/grant and Font Map before accepting bitmap output. It sends
@@ -55,7 +76,7 @@ libraries do not replace the protocol engine. Transitive dependencies may
 contain additional codecs/PDU types which this profile does not use.
 
 This first profile does not implement audio, general RDS CAL license acquisition, drawing orders, bulk
-compression, graphics-pipeline codecs, dynamic resolution,
+compression, graphics-pipeline codecs, multi-monitor display,
 RemoteApp or automatic reconnection. Unsupported required messages stop the
 connection explicitly. The pointer is composited when Windows supplies a
 position; the local OS pointer remains visible. Cursor shape/hotspot integration

@@ -1,5 +1,5 @@
 //! Minimal MCS/GCC basic settings and channel connection (MS-RDPBCGR 2.2.1.3–9).
-//! Enhanced security only. No static virtual channels or session activation yet.
+//! Enhanced security with optional clipboard and dynamic-channel transport.
 
 use crate::{data, negotiation::SecurityProtocol};
 use std::fmt;
@@ -21,6 +21,7 @@ pub struct Settings {
     pub height: u16,
     pub keyboard_layout: u32,
     pub clipboard: bool,
+    pub dynamic_resolution: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -29,6 +30,7 @@ impl Default for Settings {
             height: 768,
             keyboard_layout: 0x409,
             clipboard: false,
+            dynamic_resolution: false,
         }
     }
 }
@@ -37,7 +39,7 @@ impl Default for Settings {
 pub struct ServerSettings {
     pub version: u32,
     pub io_channel: u16,
-    pub clipboard_channel: Option<u16>,
+    pub static_channels: [Option<u16>; 2],
     pub early_capability_flags: u32,
 }
 

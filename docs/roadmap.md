@@ -32,7 +32,8 @@ All items below are planned unless explicitly marked complete.
 
 - Native connection window: address, connect, credentials.
 - [x] Initial resolution selection and centered window scaling.
-- Dynamic resolution, fullscreen and useful connection errors.
+- [x] Single-monitor dynamic resolution, local fallback and an initial Windows-host resize.
+- Fullscreen and useful connection errors.
 - Disconnect/reconnect and concurrent connections; see [session design](sessions.md).
 - Validate against Windows RDP, xrdp and GNOME Remote Desktop.
 - Test Danish/US keyboards, Wayland/X11, scaling and network interruption.

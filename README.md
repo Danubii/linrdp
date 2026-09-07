@@ -21,14 +21,27 @@ not a compatibility claim or a guarantee. Latency and frame pacing matter too.
 
 ## First-desktop viewer
 
+Running `linrdp` with no arguments in an interactive terminal opens a compact,
+keyboard-first connection screen. `linrdp tui` opens it explicitly. Enter a
+Computer and User, connect, or manage saved non-secret profiles; Options exposes
+port, initial size, dynamic resolution, clipboard, and certificate trust. Direct
+CLI commands remain available, and noninteractive no-argument use still prints
+help. See [terminal UI, profile storage, and launcher installation](docs/terminal-ui.md).
+
 ```sh
 cargo run --release -p linrdp -- connect my-computer.example --user 'MACHINE\tester' --ca /path/to/lab-ca.pem
 ```
 
 Use the same explicit certificate-pin option as the diagnostics when appropriate.
 Use `--size 1920x1080` to select the initial resolution (default 1024×768,
-16-bit color). Window resizing scales the view; dynamic resolution is not yet
-implemented. Closing its window
+16-bit color). Dynamic resolution is implemented and enabled by default; use
+`--dynamic-resolution off` to retain local scaling only. After the initial
+connection, a window resize requests a matching remote resolution through the
+Display Control channel when the server makes it available. Local scaling remains
+the fallback when it does not, and only a single monitor is supported. This path
+has protocol and local tests. A Windows-host run confirmed repeated grow and
+shrink changes, restoration to the initial size, keyboard input and Unicode text
+clipboard after resizing. Closing the window
 disconnects without signing out. Basic keyboard, three mouse buttons and vertical
 scrolling are implemented. Input goes to the focused session window.
 The initial keyboard profile is US; Danish layouts and IME are not yet validated.

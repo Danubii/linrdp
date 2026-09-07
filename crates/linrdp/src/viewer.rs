@@ -1,6 +1,7 @@
 //! Native first-desktop viewer. Window/event handling stays on the main thread.
 use crate::{session, tls};
 mod input;
+mod resize;
 use linrdp_proto::{
     data,
     desktop::{Input, Phase, Session, frame_length},
@@ -27,6 +28,8 @@ struct Display {
     active: bool,
     error: Option<String>,
     status: String,
+    epoch: u64,
+    window_size: (usize, usize),
 }
 
 pub fn run(
@@ -40,9 +43,17 @@ pub fn run(
 ) -> Result<(), Error> {
     let (server, user) = session::connect_channels(connection, stream, protocol, settings)?;
     let mut state = Session::new(user, server.io_channel)?;
-    let mut clipboard = server
-        .clipboard_channel
-        .map(|channel| crate::clipboard::Clipboard::new(user, channel));
+    let mut clipboard = if settings.clipboard {
+        server.static_channels[0].map(|channel| crate::clipboard::Clipboard::new(user, channel))
+    } else {
+        None
+    };
+    let mut resize = if settings.dynamic_resolution {
+        server.static_channels[usize::from(settings.clipboard)]
+            .map(|channel| resize::Resize::new(user, channel))
+    } else {
+        None
+    };
     let clipboard_focus = clipboard.as_ref().map(|c| c.focused());
     let (domain, username) = crate::nla::account(account)?;
     let info = state.client_info(
@@ -77,10 +88,12 @@ pub fn run(
         active: false,
         error: None,
         status: "Connecting".into(),
+        epoch: 0,
+        window_size: (initial_width, initial_height),
     });
     let stop = AtomicBool::new(false);
     let shutdown = stream.try_clone()?;
-    let (sender, receiver) = mpsc::sync_channel::<Vec<Input>>(128);
+    let (sender, receiver) = mpsc::sync_channel::<(u64, Vec<Input>)>(128);
     std::thread::scope(|scope| -> Result<(), Error> {
         let shared = &shared;
         let stop = &stop;
@@ -92,7 +105,10 @@ pub fn run(
                 shared,
                 stop,
                 &receiver,
-                &mut clipboard,
+                &mut Channels {
+                    clipboard: &mut clipboard,
+                    resize: &mut resize,
+                },
             );
             // Release only input actually sent, including when the UI closes.
             if let Ok(Some(packet)) = state.input(&[Input::ReleaseAll])
@@ -111,13 +127,19 @@ pub fn run(
             let mut revision = 0;
             let mut shown = false;
             let mut controller = input::Controller::attach(&mut window)?;
+            let mut input_epoch = 0;
             let mut rendered = Vec::new();
             let mut rendered_size = (0, 0);
             let mut rendered_revision = u64::MAX;
             while window.is_open() {
                 let ready;
                 {
-                    let frame = shared.lock().unwrap();
+                    let mut frame = shared.lock().unwrap();
+                    frame.window_size = window.get_size();
+                    if input_epoch != frame.epoch {
+                        controller.reset();
+                        input_epoch = frame.epoch;
+                    }
                     if let Some(error) = &frame.error {
                         return Err(error.clone().into());
                     }
@@ -142,7 +164,7 @@ pub fn run(
                     let events = controller.poll(&mut window, false, (width, height))?;
                     if !events.is_empty() {
                         sender
-                            .try_send(events)
+                            .try_send((input_epoch, events))
                             .map_err(|_| "input queue unavailable")?;
                     }
                     continue;
@@ -163,7 +185,7 @@ pub fn run(
                 }
                 let events = controller.poll(&mut window, ready, (width, height))?;
                 if !events.is_empty() {
-                    sender.try_send(events).map_err(
+                    sender.try_send((input_epoch, events)).map_err(
                         |_| "input queue unavailable; disconnecting to avoid lost key releases",
                     )?;
                 }
@@ -188,14 +210,18 @@ pub fn run(
     })
 }
 
+struct Channels<'a> {
+    clipboard: &'a mut Option<crate::clipboard::Clipboard>,
+    resize: &'a mut Option<resize::Resize>,
+}
 fn receive(
     connection: &mut rustls::ClientConnection,
     stream: &mut TcpStream,
     state: &mut Session,
     shared: &Mutex<Display>,
     stop: &AtomicBool,
-    input: &Receiver<Vec<Input>>,
-    clipboard: &mut Option<crate::clipboard::Clipboard>,
+    input: &Receiver<(u64, Vec<Input>)>,
+    channels: &mut Channels<'_>,
 ) -> Result<(), Error> {
     let mut pending = Vec::new();
     let mut bytes = [0u8; 16384];
@@ -204,13 +230,42 @@ fn receive(
     let mut deadline = Instant::now() + Duration::from_secs(30);
     let mut partial_since = None;
     while !stop.load(Ordering::Relaxed) {
-        if let Some(clipboard) = clipboard {
+        if let Some(resize) = channels.resize.as_mut() {
+            let desired = shared.lock().unwrap().window_size;
+            if let Some(packets) = resize.poll(
+                Instant::now(),
+                desired,
+                (state.framebuffer.width, state.framebuffer.height),
+                state.phase == Phase::Active,
+                state.framebuffer.updates > 0,
+            )? {
+                if let Some(packet) = state.input(&[Input::ReleaseAll])? {
+                    tls::write_plaintext(connection, stream, &data::encode(&packet)?)?;
+                }
+                {
+                    let mut frame = shared.lock().unwrap();
+                    frame.epoch += 1;
+                    frame.active = false;
+                }
+                for packet in packets {
+                    tls::write_plaintext(connection, stream, &data::encode(&packet)?)?;
+                }
+            }
+            shared.lock().unwrap().active =
+                state.phase == Phase::Active && state.framebuffer.updates > 0 && !resize.waiting();
+        }
+        if let Some(clipboard) = channels.clipboard.as_mut() {
             for packet in clipboard.poll().map_err(|e| e.to_string())? {
                 tls::write_plaintext(connection, stream, &data::encode(&packet)?)?;
             }
         }
         // A bounded channel preserves input ordering without blocking the UI.
-        for events in input.try_iter().take(128) {
+        for (epoch, events) in input.try_iter().take(128) {
+            if epoch != shared.lock().unwrap().epoch
+                || channels.resize.as_ref().is_some_and(|r| r.waiting())
+            {
+                continue;
+            }
             if stop.load(Ordering::Relaxed) {
                 return Ok(());
             }
@@ -249,10 +304,16 @@ fn receive(
                         let payload = data::decode(&pending[..length])?;
                         if payload.first() == Some(&0x68) {
                             let (channel, body) = linrdp_proto::channel::indication(payload)?;
-                            if let Some(clipboard) =
-                                clipboard.as_mut().filter(|c| c.channel() == channel)
+                            if let Some(clipboard) = channels
+                                .clipboard
+                                .as_mut()
+                                .filter(|c| c.channel() == channel)
                             {
                                 clipboard.receive(body).map_err(|e| e.to_string())?
+                            } else if let Some(resize) =
+                                channels.resize.as_mut().filter(|r| r.channel == channel)
+                            {
+                                resize.receive(body)?
                             } else {
                                 state.receive(payload)?
                             }
@@ -278,8 +339,16 @@ fn receive(
                     };
                     if state.phase != last_phase {
                         println!("Desktop phase: {:?}.", state.phase);
+                        {
+                            let mut frame = shared.lock().unwrap();
+                            if last_phase == Phase::Active {
+                                frame.epoch += 1;
+                            }
+                            frame.active = state.phase == Phase::Active
+                                && state.framebuffer.updates > 0
+                                && !channels.resize.as_ref().is_some_and(|r| r.waiting());
+                        }
                         last_phase = state.phase;
-                        shared.lock().unwrap().active = state.phase == Phase::Active;
                         deadline = Instant::now()
                             + Duration::from_secs(if state.phase == Phase::Active {
                                 90
@@ -296,7 +365,9 @@ fn receive(
                         frame.height = usize::from(state.framebuffer.height);
                         state.copy_display(&mut frame.pixels);
                         frame.revision += 1;
-                        frame.active = state.phase == Phase::Active;
+                        frame.active = state.phase == Phase::Active
+                            && state.framebuffer.updates > 0
+                            && !channels.resize.as_ref().is_some_and(|r| r.waiting());
                         updates = state.revision;
                     }
                 }
