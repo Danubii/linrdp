@@ -3,8 +3,8 @@ use super::common::{
 };
 use crate::{
     check_buffer_size, error::Error, icon::Icon, key_handler::KeyHandler, rate::UpdateRate,
-    CursorStyle, InputCallback, Key, KeyRepeat, MenuHandle, MouseButton, MouseMode, Result, Scale,
-    ScaleMode, UnixMenu, WindowOptions,
+    CursorStyle, InputCallback, Key, KeyRepeat, MenuHandle, MouseButton, MouseButtonEvent, MouseMode,
+    Result, Scale, ScaleMode, UnixMenu, WindowOptions,
 };
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
@@ -270,6 +270,8 @@ pub struct Window {
     scroll_x: f32,
     scroll_y: f32,
     buttons: [u8; 3],
+    button_events: Vec<MouseButtonEvent>,
+    button_events_overflow: bool,
     prev_cursor: CursorStyle,
     active: bool,
 
@@ -488,6 +490,8 @@ impl Window {
                 bg_color: 0,
                 scale_mode: opts.scale_mode,
                 buttons: [0, 0, 0],
+                button_events: Vec::new(),
+                button_events_overflow: false,
                 prev_cursor: CursorStyle::Arrow,
                 should_close: false,
                 active: false,
@@ -731,6 +735,15 @@ impl Window {
             MouseButton::Left => self.buttons[0] > 0,
             MouseButton::Middle => self.buttons[1] > 0,
             MouseButton::Right => self.buttons[2] > 0,
+        }
+    }
+
+    pub fn take_mouse_button_events(&mut self) -> Option<Vec<MouseButtonEvent>> {
+        if std::mem::take(&mut self.button_events_overflow) {
+            self.button_events.clear();
+            None
+        } else {
+            Some(std::mem::take(&mut self.button_events))
         }
     }
 
@@ -1164,21 +1177,33 @@ impl Window {
     }
 
     unsafe fn process_button(&mut self, ev: xlib::XEvent, is_down: bool) {
-        match ev.button.button {
+        let button = match ev.button.button {
             xlib::Button1 => {
                 self.buttons[0] = if is_down { 1 } else { 0 };
-                return;
+                Some(MouseButton::Left)
             }
             xlib::Button2 => {
                 self.buttons[1] = if is_down { 1 } else { 0 };
-                return;
+                Some(MouseButton::Middle)
             }
             xlib::Button3 => {
                 self.buttons[2] = if is_down { 1 } else { 0 };
-                return;
+                Some(MouseButton::Right)
             }
-
-            _ => {}
+            _ => None,
+        };
+        if let Some(button) = button {
+            if self.button_events.len() < 192 {
+                self.button_events.push(MouseButtonEvent {
+                    button,
+                    down: is_down,
+                    x: ev.button.x as f32,
+                    y: ev.button.y as f32,
+                });
+            } else {
+                self.button_events_overflow = true;
+            }
+            return;
         }
 
         // in X, the mouse wheel is usually mapped to Button4/5

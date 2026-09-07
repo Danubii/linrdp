@@ -21,7 +21,7 @@ mod xkb_keysyms;
 
 use crate::{
     icon::Icon, CursorStyle, InputCallback, Key, KeyRepeat, MenuHandle, MouseButton, MouseMode,
-    Result, UnixMenu, WindowOptions,
+    MouseButtonEvent, Result, UnixMenu, WindowOptions,
 };
 pub use common::Menu;
 use raw_window_handle::{
@@ -195,6 +195,15 @@ impl Window {
             Window::X11(w) => w.get_mouse_down(button),
             #[cfg(feature = "wayland")]
             Window::Wayland(w) => w.get_mouse_down(button),
+        }
+    }
+
+    pub fn take_mouse_button_events(&mut self) -> Option<Vec<MouseButtonEvent>> {
+        match self {
+            #[cfg(feature = "x11")]
+            Window::X11(w) => w.take_mouse_button_events(),
+            #[cfg(feature = "wayland")]
+            Window::Wayland(w) => w.take_mouse_button_events(),
         }
     }
 

@@ -93,6 +93,20 @@ pub(super) struct Controller {
     position: Option<(u16, u16)>,
     wheel: f32,
 }
+struct PointerTransition {
+    button: usize,
+    down: bool,
+    position: Option<(u16, u16)>,
+}
+struct Sample {
+    focused: bool,
+    keys: BTreeSet<Key>,
+    keys_changed: Vec<(Key, bool)>,
+    pointer_changed: Vec<PointerTransition>,
+    position: Option<(u16, u16)>,
+    buttons: [bool; 3],
+    wheel: f32,
+}
 impl Controller {
     pub fn reset(&mut self) {
         *self.queue.borrow_mut() = KeyQueue::default();
@@ -145,22 +159,42 @@ impl Controller {
             .and_then(|p| Viewport::new(window.get_size(), remote).point(p, remote));
         let buttons = [MouseButton::Left, MouseButton::Right, MouseButton::Middle]
             .map(|b| window.get_mouse_down(b));
+        let pointer = window
+            .take_mouse_button_events()
+            .ok_or("pointer event queue overflow; disconnecting")?
+            .into_iter()
+            .map(|event| PointerTransition {
+                button: button_index(event.button),
+                down: event.down,
+                position: Viewport::new(window.get_size(), remote)
+                    .point((event.x, event.y), remote),
+            })
+            .collect();
         // minifb 0.28 exposes raw Wayland axis distances (down positive),
         // but X11 exposes wheel steps (up positive). Use 15 axis units/step.
         let wheel = window
             .get_scroll_wheel()
             .map_or(0., |(_, y)| if self.wayland { -y / 15. } else { y });
-        Ok(self.sample(focused, keys, transitions, position, buttons, wheel))
+        Ok(self.sample(Sample {
+            focused,
+            keys,
+            keys_changed: transitions,
+            pointer_changed: pointer,
+            position,
+            buttons,
+            wheel,
+        }))
     }
-    fn sample(
-        &mut self,
-        focused: bool,
-        keys: BTreeSet<Key>,
-        transitions: Vec<(Key, bool)>,
-        position: Option<(u16, u16)>,
-        buttons: [bool; 3],
-        wheel: f32,
-    ) -> Vec<Input> {
+    fn sample(&mut self, sample: Sample) -> Vec<Input> {
+        let Sample {
+            focused,
+            keys,
+            keys_changed,
+            pointer_changed,
+            position,
+            buttons,
+            wheel,
+        } = sample;
         let mut events = Vec::new();
         if !focused {
             if self.focused {
@@ -179,7 +213,7 @@ impl Controller {
             self.ignored_buttons = buttons;
             return events;
         }
-        for (key, down) in transitions {
+        for (key, down) in keys_changed {
             if self.ignored.contains(&key) {
                 if !down {
                     self.ignored.remove(&key);
@@ -193,6 +227,39 @@ impl Controller {
             }
             if let Some(event) = key_event(key, down) {
                 events.push(event);
+            }
+        }
+        for transition in pointer_changed {
+            let PointerTransition {
+                button: i,
+                down,
+                position: event_position,
+            } = transition;
+            if self.ignored_buttons[i] {
+                if !down {
+                    self.ignored_buttons[i] = false;
+                }
+                continue;
+            }
+            if down && event_position.is_none() {
+                self.ignored_buttons[i] = true;
+                continue;
+            }
+            let down = down && event_position.is_some();
+            if down != self.buttons[i] {
+                if let Some((x, y)) = event_position.or(self.position) {
+                    if self.position != Some((x, y)) {
+                        events.push(Input::Move { x, y });
+                        self.position = Some((x, y));
+                    }
+                    events.push(Input::Button {
+                        button: i as u8 + 1,
+                        down,
+                        x,
+                        y,
+                    });
+                }
+                self.buttons[i] = down;
             }
         }
         if let Some((x, y)) = position {
@@ -231,6 +298,13 @@ impl Controller {
             }
         }
         events
+    }
+}
+fn button_index(button: MouseButton) -> usize {
+    match button {
+        MouseButton::Left => 0,
+        MouseButton::Right => 1,
+        MouseButton::Middle => 2,
     }
 }
 fn repeatable(key: Key) -> bool {
@@ -366,6 +440,26 @@ fn key_event(key: Key, down: bool) -> Option<Input> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    macro_rules! sample {
+        ($controller:expr, $focused:expr, $keys:expr, $keys_changed:expr, $pointer:expr, $position:expr, $buttons:expr, $wheel:expr $(,)?) => {
+            $controller.sample(Sample {
+                focused: $focused,
+                keys: $keys,
+                keys_changed: $keys_changed,
+                pointer_changed: $pointer
+                    .into_iter()
+                    .map(|(button, down, position)| PointerTransition {
+                        button,
+                        down,
+                        position,
+                    })
+                    .collect(),
+                position: $position,
+                buttons: $buttons,
+                wheel: $wheel,
+            })
+        };
+    }
     #[test]
     fn callback_preserves_short_taps_and_bounds_event_storage() {
         let queue = Rc::new(RefCell::new(KeyQueue::default()));
@@ -399,7 +493,16 @@ mod tests {
             .map(|&(k, down)| key_event(k, down).unwrap())
             .collect();
         assert_eq!(
-            c.sample(true, BTreeSet::new(), transitions, None, [false; 3], 0.),
+            sample!(
+                &mut c,
+                true,
+                BTreeSet::new(),
+                transitions,
+                vec![],
+                None,
+                [false; 3],
+                0.
+            ),
             expected
         );
     }
@@ -431,29 +534,60 @@ mod tests {
     #[test]
     fn focus_loss_releases_and_regaining_focus_ignores_held_keys() {
         let mut c = Controller::default();
-        c.sample(true, BTreeSet::new(), vec![], Some((1, 2)), [false; 3], 0.);
-        let e = c.sample(
+        sample!(
+            &mut c,
+            true,
+            BTreeSet::new(),
+            vec![],
+            vec![],
+            Some((1, 2)),
+            [false; 3],
+            0.
+        );
+        let e = sample!(
+            &mut c,
             true,
             [Key::A, Key::LeftCtrl].into(),
             vec![(Key::LeftCtrl, true), (Key::A, true)],
+            vec![],
             Some((1, 2)),
             [true, false, false],
             0.,
         );
         assert_eq!(e[0], key_event(Key::LeftCtrl, true).unwrap());
         assert_eq!(
-            c.sample(false, BTreeSet::new(), vec![], None, [false; 3], 0.),
+            sample!(
+                &mut c,
+                false,
+                BTreeSet::new(),
+                vec![],
+                vec![],
+                None,
+                [false; 3],
+                0.
+            ),
             [Input::ReleaseAll]
         );
         assert!(
-            c.sample(true, [Key::A].into(), vec![], None, [false; 3], 0.)
-                .is_empty()
+            sample!(
+                &mut c,
+                true,
+                [Key::A].into(),
+                vec![],
+                vec![],
+                None,
+                [false; 3],
+                0.
+            )
+            .is_empty()
         );
         assert!(
-            c.sample(
+            sample!(
+                &mut c,
                 true,
                 [Key::A].into(),
                 vec![(Key::A, true)],
+                vec![],
                 None,
                 [false; 3],
                 0.
@@ -489,9 +623,11 @@ mod tests {
         assert_eq!(c.position, None);
         assert_eq!(c.wheel, 0.);
         assert!(
-            c.sample(
+            sample!(
+                &mut c,
                 true,
                 [Key::A].into(),
+                vec![],
                 vec![],
                 Some((5, 6)),
                 [true, false, false],
@@ -508,10 +644,12 @@ mod tests {
             focused: true,
             ..Controller::default()
         };
-        let e = c.sample(
+        let e = sample!(
+            &mut c,
             true,
             BTreeSet::new(),
             vec![(Key::A, true), (Key::A, false)],
+            vec![],
             Some((5, 6)),
             [true, false, false],
             0.,
@@ -524,9 +662,11 @@ mod tests {
             ]
         );
         assert_eq!(
-            c.sample(
+            sample!(
+                &mut c,
                 true,
                 BTreeSet::new(),
+                vec![],
                 vec![],
                 None,
                 [true, false, false],
@@ -540,15 +680,126 @@ mod tests {
             }]
         );
         assert!(
-            c.sample(
+            sample!(
+                &mut c,
                 true,
                 BTreeSet::new(),
+                vec![],
                 vec![],
                 Some((5, 6)),
                 [true, false, false],
                 0.
             )
             .is_empty()
+        );
+    }
+    #[test]
+    fn preserves_short_click_double_click_and_drag_edges() {
+        let mut c = Controller {
+            focused: true,
+            ..Controller::default()
+        };
+        let events = sample!(
+            &mut c,
+            true,
+            BTreeSet::new(),
+            vec![],
+            vec![
+                (0, true, Some((10, 20))),
+                (0, false, Some((10, 20))),
+                (0, true, Some((10, 20))),
+                (0, false, Some((10, 20))),
+            ],
+            Some((10, 20)),
+            [false; 3],
+            0.,
+        );
+        assert_eq!(
+            events,
+            [
+                Input::Move { x: 10, y: 20 },
+                Input::Button {
+                    button: 1,
+                    down: true,
+                    x: 10,
+                    y: 20
+                },
+                Input::Button {
+                    button: 1,
+                    down: false,
+                    x: 10,
+                    y: 20
+                },
+                Input::Button {
+                    button: 1,
+                    down: true,
+                    x: 10,
+                    y: 20
+                },
+                Input::Button {
+                    button: 1,
+                    down: false,
+                    x: 10,
+                    y: 20
+                },
+            ]
+        );
+
+        let click = sample!(
+            &mut c,
+            true,
+            BTreeSet::new(),
+            vec![],
+            vec![(0, true, Some((12, 22))), (0, false, Some((12, 22)))],
+            Some((12, 22)),
+            [false; 3],
+            0.,
+        );
+        assert_eq!(click.len(), 3);
+        assert!(matches!(click[1], Input::Button { down: true, .. }));
+        assert!(matches!(click[2], Input::Button { down: false, .. }));
+
+        let drag = sample!(
+            &mut c,
+            true,
+            BTreeSet::new(),
+            vec![],
+            vec![(0, true, Some((20, 30))), (0, false, Some((40, 50)))],
+            Some((40, 50)),
+            [false; 3],
+            0.,
+        );
+        assert_eq!(
+            drag,
+            [
+                Input::Move { x: 20, y: 30 },
+                Input::Button {
+                    button: 1,
+                    down: true,
+                    x: 20,
+                    y: 30
+                },
+                Input::Move { x: 40, y: 50 },
+                Input::Button {
+                    button: 1,
+                    down: false,
+                    x: 40,
+                    y: 50
+                },
+            ]
+        );
+        assert_eq!(
+            sample!(
+                &mut c,
+                false,
+                BTreeSet::new(),
+                vec![],
+                vec![],
+                None,
+                [false; 3],
+                0.
+            ),
+            [Input::ReleaseAll]
         );
     }
 }

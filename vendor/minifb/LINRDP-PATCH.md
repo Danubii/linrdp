@@ -10,6 +10,14 @@ This patch resolves key transitions at level zero in the active layout;
 character callbacks still use the effective symbol. Modifier transitions remain
 separate. No compositor configuration is changed.
 
+The Wayland and X11 backends also retain native left, middle and right mouse
+button down/up events in a bounded 192-edge queue, including short clicks or
+double-click sequences completed between application render frames. LinRDP
+drains those ordered edges when polling input. Queue overflow is reported so the
+session fails rather than silently losing a press or release. This behavior has
+local regression coverage; an actual Windows GUI double-click has not yet been
+verified.
+
 The regression test uses a real libxkbcommon state and an embedded keymap, without
 a display server. It covers Shift+letter, Shift+Tab, shifted digits and modifier
 changes between press and release. Run:

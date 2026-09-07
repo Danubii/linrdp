@@ -15,8 +15,8 @@ use super::common::{
 };
 use crate::{
     check_buffer_size, key_handler::KeyHandler, rate::UpdateRate, CursorStyle, Error,
-    InputCallback, Key, KeyRepeat, MenuHandle, MouseButton, MouseMode, Result, Scale, ScaleMode,
-    UnixMenu, WindowOptions,
+    InputCallback, Key, KeyRepeat, MenuHandle, MouseButton, MouseButtonEvent, MouseMode, Result,
+    Scale, ScaleMode, UnixMenu, WindowOptions,
 };
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
@@ -452,6 +452,8 @@ pub struct Window {
     scroll_x: f32,
     scroll_y: f32,
     buttons: [bool; 8], // Linux kernel defines 8 mouse buttons
+    button_events: Vec<MouseButtonEvent>,
+    button_events_overflow: bool,
     prev_cursor: CursorStyle,
 
     should_close: bool,
@@ -541,6 +543,8 @@ impl Window {
             scroll_x: 0.,
             scroll_y: 0.,
             buttons: [false; 8],
+            button_events: Vec::new(),
+            button_events_overflow: false,
             prev_cursor: CursorStyle::Arrow,
 
             should_close: false,
@@ -625,6 +629,15 @@ impl Window {
             MouseButton::Left => self.buttons[0],
             MouseButton::Right => self.buttons[1],
             MouseButton::Middle => self.buttons[2],
+        }
+    }
+
+    pub fn take_mouse_button_events(&mut self) -> Option<Vec<MouseButtonEvent>> {
+        if std::mem::take(&mut self.button_events_overflow) {
+            self.button_events.clear();
+            None
+        } else {
+            Some(std::mem::take(&mut self.button_events))
         }
     }
 
@@ -888,16 +901,26 @@ impl Window {
 
                     let pressed = state == ButtonState::Pressed;
 
-                    match button {
+                    let button = match button {
                         // Left mouse button
-                        KEY_MOUSE_BTN1 => self.buttons[0] = pressed,
+                        KEY_MOUSE_BTN1 => Some((0, MouseButton::Left)),
                         // Right mouse button
-                        KEY_MOUSE_BTN2 => self.buttons[1] = pressed,
+                        KEY_MOUSE_BTN2 => Some((1, MouseButton::Right)),
                         // Middle mouse button
-                        KEY_MOUSE_BTN3 => self.buttons[2] = pressed,
-                        _ => {
-                            // TODO: handle more mouse buttons (see: linux/input-event-codes.h from
-                            // the Linux kernel)
+                        KEY_MOUSE_BTN3 => Some((2, MouseButton::Middle)),
+                        _ => None,
+                    };
+                    if let Some((index, button)) = button {
+                        self.buttons[index] = pressed;
+                        if self.button_events.len() < 192 {
+                            self.button_events.push(MouseButtonEvent {
+                                button,
+                                down: pressed,
+                                x: self.mouse_x,
+                                y: self.mouse_y,
+                            });
+                        } else {
+                            self.button_events_overflow = true;
                         }
                     }
 

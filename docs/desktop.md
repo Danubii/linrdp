@@ -86,11 +86,13 @@ with local input is not complete.
 
 The focused, activated session accepts keyboard scancodes, three mouse buttons,
 pointer movement and vertical wheel input through TLS-protected slow-path Input
-PDUs. Keyboard callbacks preserve press/release order, including taps completed
-between rendered frames. The UI event buffer and network input queue are bounded;
-overflow disconnects instead of silently dropping key releases. A 20 ms receive
-poll budget lets outgoing input progress while the remote desktop is static.
-This is a scheduling choice, not an end-to-end latency guarantee.
+PDUs. Native event queues preserve keyboard and mouse-button press/release order,
+including very short clicks and double-click edges completed between rendered
+frames. The native pointer queue, UI event buffer and network input queue are
+bounded; overflow fails the session instead of silently dropping an edge or key
+release. A 20 ms receive poll budget lets outgoing input progress while the
+remote desktop is static. This is a scheduling choice, not an end-to-end latency
+guarantee.
 
 Focus loss releases keys and buttons. Already-held keys/buttons are ignored on
 focus entry until released; minimizing and normal closure also release tracked
@@ -100,13 +102,13 @@ Clicks outside the centered desktop are ignored. Leaving the desktop during a
 drag releases its button at the last valid position; reentry does not click
 again until the physical button has been released.
 
-Mouse state is polled once per UI frame, so extremely short clicks can still be
-missed. Keyboard events use callbacks to avoid this limitation. The current
-US scancode mapping covers ordinary keys, modifiers, navigation, keypad and
-F1–F12. Pause, Print Screen, F13–F15, IME/Unicode text composition, layout
-selection and lock-state synchronization with the local desktop remain future
-work. Compositor shortcuts remain local where intercepted. Danish keyboards
-and X11 input have not been tested against a real host.
+Queued mouse edges are implemented and locally tested, but an actual Windows GUI
+double-click has not yet been verified. The current US scancode mapping covers
+ordinary keys, modifiers, navigation, keypad and F1–F12. Pause, Print Screen,
+F13–F15, IME/Unicode text composition, layout selection and lock-state
+synchronization with the local desktop remain future work. Compositor shortcuts
+remain local where intercepted. Danish keyboards and X11 input have not been
+tested against a real host.
 
 minifb exposes different wheel units on Wayland and X11. The viewer identifies
 its actual native backend, reverses Wayland's downward-positive axis and uses

@@ -95,6 +95,14 @@ pub enum MouseButton {
     Right,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MouseButtonEvent {
+    pub button: MouseButton,
+    pub down: bool,
+    pub x: f32,
+    pub y: f32,
+}
+
 /// The different modes that can be used to decide how mouse coordinates should be handled
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum MouseMode {
@@ -690,6 +698,20 @@ impl Window {
     #[inline]
     pub fn get_mouse_down(&self, button: MouseButton) -> bool {
         self.0.get_mouse_down(button)
+    }
+
+    /// Drains ordered physical button edges in unscaled window coordinates.
+    /// Returns `Some(empty)` when there are no edges, or `None` on overflow
+    /// after resetting the bounded queue.
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    pub fn take_mouse_button_events(&mut self) -> Option<Vec<MouseButtonEvent>> {
+        self.0.take_mouse_button_events()
     }
 
     /// Get the current movement of the scroll wheel.
