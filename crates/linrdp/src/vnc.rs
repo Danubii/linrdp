@@ -188,8 +188,10 @@ impl Keyboard {
             self.held.contains_key(&Key::LeftShift) || self.held.contains_key(&Key::RightShift);
         if down && ctrl && alt && shift && matches!(key, Key::Enter | Key::Escape) {
             self.events.clear();
-            self.pending_text = None;
-            self.held.clear();
+            // Modifier presses may already have reached the remote desktop in a
+            // previous frame. Always release them when consuming the local
+            // capture chord, otherwise Ctrl/Alt/Shift remain stuck remotely.
+            self.release();
             self.grab_change = Some(key == Key::Enter);
             return;
         }
@@ -873,7 +875,13 @@ mod tests {
         keyboard.key(Key::LeftShift, true);
         keyboard.key(Key::Enter, true);
         assert_eq!(keyboard.take_grab_change(), Some(true));
-        assert!(keyboard.drain().is_empty());
+        let releases = keyboard.drain();
+        assert_eq!(releases.len(), 3);
+        assert!(
+            releases
+                .iter()
+                .all(|event| matches!(event, X11Event::KeyEvent(key) if !key.down))
+        );
         assert!(keyboard.held.is_empty());
 
         keyboard.key(Key::LeftCtrl, true);
@@ -881,6 +889,12 @@ mod tests {
         keyboard.key(Key::LeftShift, true);
         keyboard.key(Key::Escape, true);
         assert_eq!(keyboard.take_grab_change(), Some(false));
-        assert!(keyboard.drain().is_empty());
+        let releases = keyboard.drain();
+        assert_eq!(releases.len(), 3);
+        assert!(
+            releases
+                .iter()
+                .all(|event| matches!(event, X11Event::KeyEvent(key) if !key.down))
+        );
     }
 }
