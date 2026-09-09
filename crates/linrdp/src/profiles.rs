@@ -22,9 +22,15 @@ pub struct Profile {
     pub port: u16,
     pub size: Option<String>,
     pub dynamic_resolution: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub h264: bool,
     pub clipboard: bool,
     pub ca: Option<String>,
     pub fingerprint: Option<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl Profile {
@@ -43,6 +49,9 @@ impl Profile {
             "--clipboard".into(),
             if self.clipboard { "on" } else { "off" }.into(),
         ]);
+        if self.h264 {
+            args.extend(["--graphics".into(), "h264".into()]);
+        }
         if let Some(ca) = &self.ca {
             args.extend(["--ca".into(), ca.clone()]);
         } else if let Some(fingerprint) = &self.fingerprint {
@@ -175,6 +184,7 @@ mod tests {
             port: 3390,
             size: Some("1280x800".into()),
             dynamic_resolution: true,
+            h264: false,
             clipboard: false,
             ca: Some("/tmp/lab.pem".into()),
             fingerprint: None,

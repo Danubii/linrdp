@@ -10,4 +10,8 @@ pub mod negotiation;
 pub mod channel;
 pub mod clipboard;
 
+pub mod avc;
+pub mod codecs;
 pub mod display_control;
+pub mod gfx;
+pub mod zgfx;

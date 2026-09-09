@@ -12,7 +12,7 @@ fn per_length(out: &mut Vec<u8>, value: usize) {
 }
 
 pub(super) fn request(settings: Settings, protocol: SecurityProtocol) -> Vec<u8> {
-    let core_length = if settings.dynamic_resolution {
+    let core_length = if settings.dynamic_resolution || settings.h264 {
         234
     } else {
         216
@@ -32,14 +32,23 @@ pub(super) fn request(settings: Settings, protocol: SecurityProtocol) -> Vec<u8>
     core[64..68].copy_from_slice(&12u32.to_le_bytes());
     core[132..136].copy_from_slice(&[1, 0xca, 1, 0]);
     core[140..144].copy_from_slice(&[16, 0, 2, 0]); // 16-bit color only
-    core[144] = 5 | if settings.dynamic_resolution { 0x40 } else { 0 }; // RNS_UD_CS_SUPPORT_ERRINFO_PDU | SUPPORT_STATUSINFO_PDU
+    core[144] = 5 | if settings.dynamic_resolution || settings.h264 {
+        0x40
+    } else {
+        0
+    }; // RNS_UD_CS_SUPPORT_ERRINFO_PDU | SUPPORT_STATUSINFO_PDU
+    if settings.h264 {
+        core[140..144].copy_from_slice(&[24, 0, 0x0b, 0]); // 16/24/32-bit support.
+        core[144] |= 0x02; // RNS_UD_CS_WANT_32BPP_SESSION.
+        core[145] |= 0x01; // RNS_UD_CS_SUPPORT_DYNVC_GFX_PROTOCOL (0x0100).
+    }
     let selected: u32 = match protocol {
         SecurityProtocol::Tls => 1,
         SecurityProtocol::CredSsp => 2,
         SecurityProtocol::CredSspEarlyAuth => 8,
     };
     core[212..216].copy_from_slice(&selected.to_le_bytes());
-    if settings.dynamic_resolution {
+    if settings.dynamic_resolution || settings.h264 {
         // The extended RDP 8.1 core fields advertise 100% desktop/device scale.
         // Zero physical dimensions mean unknown, per MS-RDPBCGR 2.2.1.3.2.
         core[226..230].copy_from_slice(&100u32.to_le_bytes());
@@ -49,7 +58,7 @@ pub(super) fn request(settings: Settings, protocol: SecurityProtocol) -> Vec<u8>
     core.extend_from_slice(&[2, 0xc0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     let names: Vec<_> = [
         (settings.clipboard, b"cliprdr\0"),
-        (settings.dynamic_resolution, b"drdynvc\0"),
+        (settings.dynamic_resolution || settings.h264, b"drdynvc\0"),
     ]
     .into_iter()
     .filter_map(|(enabled, name)| enabled.then_some(name))

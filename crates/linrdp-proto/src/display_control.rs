@@ -1,6 +1,14 @@
-//! MS-RDPEDYC versions 1–2 and the single-monitor MS-RDPEDISP endpoint.
+//! MS-RDPEDYC versions 1–2 with display control and optional graphics endpoints.
 use crate::desktop::{Error, Result};
 const NAME: &[u8] = b"Microsoft::Windows::RDS::DisplayControl\0";
+const GRAPHICS_NAME: &[u8] = b"Microsoft::Windows::RDS::Graphics\0";
+const MAX_GRAPHICS_MESSAGE: usize = 16 * 1024 * 1024;
+#[derive(Debug, PartialEq, Eq)]
+pub enum GraphicsEvent {
+    Opened,
+    Data(Vec<u8>),
+    Closed,
+}
 fn bad(s: &str) -> Error {
     Error(s.into())
 }
@@ -34,17 +42,90 @@ fn header(kind: u8, id: u32) -> Vec<u8> {
 #[derive(Default)]
 pub struct DisplayControl {
     negotiated: bool,
+    graphics_enabled: bool,
+    graphics_id: Option<u32>,
+    graphics_fragment: Vec<u8>,
+    graphics_total: Option<usize>,
+    graphics_events: Vec<GraphicsEvent>,
     id: Option<u32>,
     area: Option<u64>,
     fragment: Vec<u8>,
     total: Option<usize>,
 }
 impl DisplayControl {
+    pub fn with_graphics() -> Self {
+        Self {
+            graphics_enabled: true,
+            ..Self::default()
+        }
+    }
+    pub fn take_graphics(&mut self) -> Vec<GraphicsEvent> {
+        std::mem::take(&mut self.graphics_events)
+    }
+    /// Encode a graphics message into uncompressed DVC PDUs, each at most 1600 bytes.
+    pub fn send_graphics(&self, data: &[u8]) -> Result<Vec<Vec<u8>>> {
+        let id = self
+            .graphics_id
+            .ok_or_else(|| bad("graphics channel is not open"))?;
+        if data.is_empty() || data.len() > MAX_GRAPHICS_MESSAGE {
+            return Err(bad("invalid graphics message size"));
+        }
+        let continuation = header(3, id);
+        if continuation.len() + data.len() <= 1600 {
+            let mut p = continuation;
+            p.extend_from_slice(data);
+            return Ok(vec![p]);
+        }
+        let mut first = header(2, id);
+        let (width, length) = if data.len() <= 65535 { (1, 2) } else { (2, 4) };
+        first[0] |= width << 2;
+        first.extend_from_slice(&(data.len() as u32).to_le_bytes()[..length]);
+        let count = 1600 - first.len();
+        first.extend_from_slice(&data[..count]);
+        let mut packets = vec![first];
+        for chunk in data[count..].chunks(1600 - continuation.len()) {
+            let mut p = continuation.clone();
+            p.extend_from_slice(chunk);
+            packets.push(p);
+        }
+        Ok(packets)
+    }
+    fn graphics_data(&mut self, cmd: u8, width: u8, mut b: &[u8]) -> Result<()> {
+        if cmd == 2 {
+            if self.graphics_total.is_some() {
+                return Err(bad("overlapping graphics DVC fragments"));
+            }
+            let total = number(&mut b, width)? as usize;
+            if total == 0 || total > MAX_GRAPHICS_MESSAGE {
+                return Err(bad("invalid graphics message size"));
+            }
+            self.graphics_total = Some(total);
+        }
+        if let Some(total) = self.graphics_total {
+            if b.is_empty() || self.graphics_fragment.len() + b.len() > total {
+                return Err(bad("invalid graphics DVC fragment size"));
+            }
+            self.graphics_fragment.extend_from_slice(b);
+            if self.graphics_fragment.len() == total {
+                self.graphics_events
+                    .push(GraphicsEvent::Data(std::mem::take(
+                        &mut self.graphics_fragment,
+                    )));
+                self.graphics_total = None;
+            }
+        } else {
+            if b.is_empty() {
+                return Err(bad("empty graphics DVC message"));
+            }
+            self.graphics_events.push(GraphicsEvent::Data(b.to_vec()));
+        }
+        Ok(())
+    }
     pub fn ready(&self) -> bool {
         self.id.is_some() && self.area.is_some()
     }
     pub fn partial(&self) -> bool {
-        self.total.is_some()
+        self.total.is_some() || self.graphics_total.is_some()
     }
     /// Decode one reassembled static-channel payload; returns DVC replies.
     pub fn receive(&mut self, p: &[u8]) -> Result<Vec<Vec<u8>>> {
@@ -62,8 +143,7 @@ impl DisplayControl {
                 return Err(bad("invalid DVC capability version or length"));
             }
             self.negotiated = true;
-            // Version 2 keeps the transport uncompressed. Only one endpoint is
-            // accepted, so there are no competing priority classes to schedule.
+            // Version 2 keeps both endpoints uncompressed.
             return Ok(vec![vec![0x50, 0, version.min(2) as u8, 0]]);
         }
         if !self.negotiated {
@@ -79,18 +159,29 @@ impl DisplayControl {
                 {
                     return Err(bad("invalid DVC channel name"));
                 }
-                if self.id == Some(id) {
-                    return Err(bad("duplicate display channel identifier"));
+                if self.id == Some(id) || self.graphics_id == Some(id) {
+                    return Err(bad("duplicate DVC channel identifier"));
                 }
-                let accepted = b == NAME && self.id.is_none();
-                if accepted {
+                let display = b == NAME && self.id.is_none();
+                let graphics =
+                    self.graphics_enabled && b == GRAPHICS_NAME && self.graphics_id.is_none();
+                let accepted = display || graphics;
+                if display {
                     self.id = Some(id);
+                }
+                if graphics {
+                    self.graphics_id = Some(id);
+                    self.graphics_events.push(GraphicsEvent::Opened);
                 }
                 let mut reply = header(1, id);
                 reply.extend((if accepted { 0u32 } else { 0xc00000bb }).to_le_bytes());
                 Ok(vec![reply])
             }
             2 | 3 => {
+                if self.graphics_id == Some(id) {
+                    self.graphics_data(cmd, (p[0] >> 2) & 3, b)?;
+                    return Ok(Vec::new());
+                }
                 if self.id != Some(id) {
                     return Err(bad("data for an unopened DVC"));
                 }
@@ -129,6 +220,12 @@ impl DisplayControl {
                     self.area = None;
                     self.fragment.clear();
                     self.total = None;
+                }
+                if self.graphics_id == Some(id) {
+                    self.graphics_id = None;
+                    self.graphics_fragment.clear();
+                    self.graphics_total = None;
+                    self.graphics_events.push(GraphicsEvent::Closed);
                 }
                 Ok(vec![header(4, id)])
             }
@@ -195,6 +292,108 @@ impl DisplayControl {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn create(c: &mut DisplayControl, id: u32, name: &[u8]) -> Result<Vec<Vec<u8>>> {
+        let mut p = header(1, id);
+        p.extend(name);
+        c.receive(&p)
+    }
+    fn graphics(id: u32) -> DisplayControl {
+        let mut c = DisplayControl::with_graphics();
+        c.receive(&[0x50, 0, 1, 0]).unwrap();
+        create(&mut c, id, GRAPHICS_NAME).unwrap();
+        assert_eq!(c.take_graphics(), [GraphicsEvent::Opened]);
+        c
+    }
+    #[test]
+    fn graphics_fragmentation_round_trips_all_id_and_length_widths() {
+        for id in [1, 300, 70_000] {
+            for len in [1, 1595, 1598, 1600, 65_535, 65_536, MAX_GRAPHICS_MESSAGE] {
+                let mut c = graphics(id);
+                let data: Vec<_> = (0..len).map(|i| i as u8).collect();
+                let packets = c.send_graphics(&data).unwrap();
+                for p in &packets {
+                    assert!(p.len() <= 1600);
+                    c.receive(p).unwrap();
+                }
+                assert!(!c.partial());
+                assert_eq!(c.take_graphics(), [GraphicsEvent::Data(data)]);
+            }
+        }
+    }
+    #[test]
+    fn interleaved_endpoints_close_and_reopen_independently() {
+        let mut c = graphics(1);
+        create(&mut c, 300, NAME).unwrap();
+        let caps = caps();
+        let mut first = header(2, 300);
+        first.push(20);
+        first.extend(&caps[..7]);
+        c.receive(&first).unwrap();
+        let data = vec![42; 5000];
+        let packets = c.send_graphics(&data).unwrap();
+        c.receive(&packets[0]).unwrap();
+        let mut last = header(3, 300);
+        last.extend(&caps[7..]);
+        c.receive(&last).unwrap();
+        assert!(c.ready());
+        assert!(c.partial());
+        for p in &packets[1..] {
+            c.receive(p).unwrap();
+        }
+        assert_eq!(c.take_graphics(), [GraphicsEvent::Data(data)]);
+        c.receive(&packets[0]).unwrap();
+        c.receive(&header(4, 1)).unwrap();
+        assert!(c.ready());
+        assert!(!c.partial());
+        assert_eq!(c.take_graphics(), [GraphicsEvent::Closed]);
+        create(&mut c, 1, GRAPHICS_NAME).unwrap();
+        c.receive(&header(4, 300)).unwrap();
+        assert!(!c.ready());
+        let p = c.send_graphics(b"still open").unwrap();
+        c.receive(&p[0]).unwrap();
+        assert_eq!(
+            c.take_graphics(),
+            [
+                GraphicsEvent::Opened,
+                GraphicsEvent::Data(b"still open".to_vec())
+            ]
+        );
+        create(&mut c, 300, NAME).unwrap();
+        c.receive(&last).unwrap_err(); // A previous fragmented capability does not survive close.
+    }
+    #[test]
+    fn graphics_rejects_duplicate_ids_unknown_channels_and_bad_fragments() {
+        let mut c = open();
+        let rejected = create(&mut c, 1, GRAPHICS_NAME).unwrap();
+        assert_eq!(&rejected[0][2..], &0xc00000bbu32.to_le_bytes());
+        let mut c = graphics(1);
+        assert!(create(&mut c, 1, NAME).is_err());
+        create(&mut c, 300, NAME).unwrap();
+        assert!(create(&mut c, 300, GRAPHICS_NAME).is_err());
+        assert!(c.send_graphics(&[]).is_err());
+        assert!(c.send_graphics(&vec![0; MAX_GRAPHICS_MESSAGE + 1]).is_err());
+        for size in [0u32, MAX_GRAPHICS_MESSAGE as u32 + 1, u32::MAX] {
+            let mut p = vec![0x28, 1];
+            p.extend(size.to_le_bytes());
+            p.push(0);
+            assert!(c.receive(&p).is_err());
+        }
+        assert!(c.receive(&[0x30, 1]).is_err());
+        assert!(c.receive(&[0x30, 2, 0]).is_err());
+        assert!(c.receive(&vec![0; 1601]).is_err());
+        c.receive(&[0x20, 1, 2, 7]).unwrap();
+        assert!(c.receive(&[0x20, 1, 2, 8]).is_err());
+        assert!(c.receive(&[0x30, 1, 8, 9]).is_err());
+        c.receive(&header(4, 1)).unwrap();
+        create(&mut c, 1, GRAPHICS_NAME).unwrap();
+        c.receive(&[0x20, 1, 2, 7]).unwrap();
+        c.receive(&[0x30, 1, 8]).unwrap();
+        assert!(!c.partial());
+        assert_eq!(
+            c.take_graphics().last(),
+            Some(&GraphicsEvent::Data(vec![7, 8]))
+        );
+    }
     fn open() -> DisplayControl {
         let mut c = DisplayControl::default();
         assert_eq!(

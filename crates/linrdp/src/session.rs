@@ -60,7 +60,7 @@ fn setup(
 ) -> Result<(mcs::ServerSettings, u16), Error> {
     transport.send(&mcs::connect_initial(settings, protocol)?)?;
     let server = mcs::connect_response(&transport.receive()?, 0x0b)?;
-    if usize::from(settings.clipboard) + usize::from(settings.dynamic_resolution)
+    if usize::from(settings.clipboard) + usize::from(settings.dynamic_resolution || settings.h264)
         != server.static_channels.iter().flatten().count()
     {
         return Err("server static channel count mismatch".into());

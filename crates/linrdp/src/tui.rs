@@ -233,6 +233,7 @@ enum Focus {
     Port,
     Size,
     Dynamic,
+    Graphics,
     Clipboard,
     Trust,
     TrustValue,
@@ -269,6 +270,7 @@ struct Form {
     port: String,
     size: String,
     dynamic: bool,
+    h264: bool,
     clipboard: bool,
     trust: Trust,
     trust_value: String,
@@ -283,6 +285,7 @@ impl Default for Form {
             port: "3389".into(),
             size: "1024x768".into(),
             dynamic: true,
+            h264: false,
             clipboard: true,
             trust: Trust::System,
             trust_value: String::new(),
@@ -306,6 +309,7 @@ impl Form {
             port: profile.port.to_string(),
             size: profile.size.clone().unwrap_or_else(|| "1024x768".into()),
             dynamic: profile.dynamic_resolution,
+            h264: profile.h264,
             clipboard: profile.clipboard,
             trust,
             trust_value,
@@ -322,6 +326,7 @@ impl Form {
             port,
             size: (!self.size.trim().is_empty()).then(|| self.size.trim().into()),
             dynamic_resolution: self.dynamic,
+            h264: self.h264,
             clipboard: self.clipboard,
             ca: (self.trust == Trust::Ca).then(|| self.trust_value.trim().into()),
             fingerprint: (self.trust == Trust::SavedPin)
@@ -385,6 +390,7 @@ impl App {
                     .size
                     .map_or_else(|| "1024x768".into(), |(w, h)| format!("{w}x{h}")),
                 dynamic: options.dynamic_resolution,
+                h264: options.h264,
                 clipboard: options.clipboard,
                 trust: if options.ca_file.is_some() {
                     Trust::Ca
@@ -428,6 +434,7 @@ impl App {
             Focus::Size,
             Focus::Dynamic,
             Focus::Clipboard,
+            Focus::Graphics,
             Focus::Trust,
             Focus::TrustValue,
         ];
@@ -568,6 +575,10 @@ impl App {
             }
             Focus::Dynamic => {
                 self.form.dynamic = !self.form.dynamic;
+                Command::None
+            }
+            Focus::Graphics => {
+                self.form.h264 = !self.form.h264;
                 Command::None
             }
             Focus::Clipboard => {
@@ -781,6 +792,14 @@ impl App {
                 self.form.trust.label(),
                 self.focus == Focus::Trust,
             )?;
+            choice(
+                out,
+                58,
+                20,
+                "H.264",
+                self.form.h264,
+                self.focus == Focus::Graphics,
+            )?;
             if self.form.trust == Trust::Ca {
                 labeled(
                     out,
@@ -949,6 +968,28 @@ mod tests {
     fn complete(app: &mut App) {
         app.form.computer = "host.example".into();
         app.form.user = "tester".into();
+    }
+
+    #[test]
+    fn graphics_choice_survives_profile_and_connection_resume() {
+        let mut app = App::new(Vec::new(), None, None);
+        complete(&mut app);
+        assert!(!app.form.h264);
+        app.focus = Focus::Graphics;
+        app.key(key(KeyCode::Enter));
+        let saved = app.form.profile("Graphics test".into()).unwrap();
+        let json = serde_json::to_string(&saved).unwrap();
+        let saved: Profile = serde_json::from_str(&json).unwrap();
+        assert!(saved.h264);
+        let args = saved.arguments();
+        assert!(crate::Options::parse(&args).unwrap().h264);
+        let resumed = App::new(Vec::new(), None, Some(&args));
+        assert!(resumed.form.h264);
+        assert!(Form::from_profile(&saved).h264);
+        app.key(key(KeyCode::Enter));
+        let bitmap = app.form.profile("Bitmap test".into()).unwrap();
+        assert!(!serde_json::to_string(&bitmap).unwrap().contains("h264"));
+        assert!(!crate::Options::parse(&bitmap.arguments()).unwrap().h264);
     }
     #[test]
     fn keyboard_flow_builds_valid_cli_arguments() {

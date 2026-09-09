@@ -6,6 +6,9 @@ activation, then opens a native desktop display. The password is prompted
 locally after certificate verification. Connection setup still starts from
 the terminal; there is no graphical connection form yet.
 
+This branch also offers an opt-in [H.264 graphics profile](h264.md). The
+description below covers the default bitmap profile unless stated otherwise.
+
 The initial profile requests 1024×768 at 16 bits per pixel by default.
 `--size WIDTHxHEIGHT` selects 200–8192 pixels per dimension, bounded by the
 16-million-pixel budget. Windows has accepted both 1920×1080 and 1280×800. The decoder supports

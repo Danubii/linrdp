@@ -1,5 +1,34 @@
 use linrdp_proto::{display_control::DisplayControl, mcs, negotiation::SecurityProtocol};
 
+#[test]
+fn graphics_requests_32_bit_session_and_dvc_even_without_resize() {
+    let packet = mcs::connect_initial(
+        mcs::Settings {
+            h264: true,
+            ..Default::default()
+        },
+        SecurityProtocol::CredSsp,
+    )
+    .unwrap();
+    let core = packet
+        .windows(4)
+        .position(|b| b == [1, 0xc0, 234, 0])
+        .unwrap();
+    assert_eq!(&packet[core + 140..core + 144], &[24, 0, 0x0b, 0]);
+    assert_eq!(
+        u16::from_le_bytes(packet[core + 144..core + 146].try_into().unwrap()) & 0x0102,
+        0x0102
+    );
+    assert!(packet.windows(8).any(|b| b == b"drdynvc\0"));
+    assert!(!packet.windows(8).any(|b| b == b"cliprdr\0"));
+    let bitmap = mcs::connect_initial(mcs::Settings::default(), SecurityProtocol::CredSsp).unwrap();
+    let core = bitmap
+        .windows(4)
+        .position(|b| b == [1, 0xc0, 216, 0])
+        .unwrap();
+    assert_eq!(&bitmap[core + 140..core + 146], &[16, 0, 2, 0, 5, 0]);
+}
+
 // Independently assemble the BER/GCC response, including SC_NET's odd-count padding.
 fn response(channels: &[u16]) -> Vec<u8> {
     let mut blocks = vec![1, 12, 12, 0, 4, 0, 8, 0, 11, 0, 0, 0];

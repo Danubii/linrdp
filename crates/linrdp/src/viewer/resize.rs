@@ -1,7 +1,12 @@
-use linrdp_proto::{channel, display_control::DisplayControl};
+use linrdp_proto::{
+    channel,
+    desktop::Session,
+    display_control::{DisplayControl, GraphicsEvent},
+    gfx::Gfx,
+};
 use std::time::{Duration, Instant};
 type Error = Box<dyn std::error::Error>;
-/// One negotiated endpoint, one outstanding resize, and only the latest window size.
+/// Shared graphics/display DVC transport and one outstanding resize request.
 pub(super) struct Resize {
     user: u16,
     pub channel: u16,
@@ -12,6 +17,20 @@ pub(super) struct Resize {
     last: Option<(u16, u16)>,
     pending: Option<((u16, u16), Instant)>,
     announced: bool,
+    enabled: bool,
+    graphics: Option<Gfx>,
+    graphics_revision: u64,
+    avc_reported: bool,
+}
+impl Drop for Resize {
+    fn drop(&mut self) {
+        if let Some(graphics) = &self.graphics {
+            println!(
+                "Graphics session: {} completed frames, {} H.264 updates; codec mask 0x{:x}.",
+                graphics.frames, graphics.avc_frames, graphics.seen_codecs
+            );
+        }
+    }
 }
 impl Resize {
     pub fn new(user: u16, channel: u16) -> Self {
@@ -25,19 +44,79 @@ impl Resize {
             last: None,
             pending: None,
             announced: false,
+            enabled: true,
+            graphics: None,
+            graphics_revision: 0,
+            avc_reported: false,
         }
+    }
+    pub fn with_graphics(user: u16, channel: u16, resize: bool) -> Self {
+        let mut state = Self::new(user, channel);
+        state.enabled = resize;
+        state.control = DisplayControl::with_graphics();
+        state.graphics = Some(Gfx::new());
+        state
     }
     pub fn waiting(&self) -> bool {
         self.pending.is_some()
     }
-    pub fn receive(&mut self, b: &[u8]) -> Result<Vec<Vec<u8>>, Error> {
+    pub fn receive(&mut self, b: &[u8], desktop: &mut Session) -> Result<Vec<Vec<u8>>, Error> {
         let mut out = Vec::new();
         if let Some(message) = self.wire.receive(b)? {
             for reply in self.control.receive(&message)? {
                 out.extend(channel::send_dvc(self.user, self.channel, &reply)?);
             }
         }
-        if self.wire.is_partial() || self.control.partial() {
+        for event in self.control.take_graphics() {
+            let Some(graphics) = self.graphics.as_mut() else {
+                continue;
+            };
+            let replies = match event {
+                GraphicsEvent::Opened => {
+                    *graphics = Gfx::new();
+                    self.graphics_revision = 0;
+                    self.avc_reported = false;
+                    println!("RDP graphics channel opened; offering H.264 AVC420.");
+                    vec![graphics.advertise()]
+                }
+                GraphicsEvent::Data(bytes) => graphics.receive(&bytes)?,
+                GraphicsEvent::Closed => {
+                    *graphics = Gfx::new();
+                    self.graphics_revision = 0;
+                    println!("RDP graphics channel closed.");
+                    Vec::new()
+                }
+            };
+            if graphics.avc_frames > 0 && !self.avc_reported {
+                println!("H.264 AVC420 decoding active (OpenH264 software decoder).");
+                self.avc_reported = true;
+            }
+            if graphics.revision != self.graphics_revision {
+                if let Some(frame) = &graphics.output {
+                    desktop.framebuffer.width = frame.width;
+                    desktop.framebuffer.height = frame.height;
+                    desktop.framebuffer.pixels.clone_from(&frame.pixels);
+                    desktop.framebuffer.updates = desktop.framebuffer.updates.saturating_add(1);
+                    desktop.revision = desktop.revision.saturating_add(1);
+                    if self.graphics_revision == 0 {
+                        println!(
+                            "First RDP graphics frame decoded: {}x{}; codec {:?}; AVC negotiated: {}.",
+                            frame.width, frame.height, graphics.last_codec, graphics.avc_enabled
+                        );
+                    }
+                }
+                self.graphics_revision = graphics.revision;
+            }
+            for reply in replies {
+                for dvc in self.control.send_graphics(&reply)? {
+                    out.extend(channel::send_dvc(self.user, self.channel, &dvc)?);
+                }
+            }
+        }
+        if self.wire.is_partial()
+            || self.control.partial()
+            || self.graphics.as_ref().is_some_and(Gfx::partial)
+        {
             self.partial.get_or_insert(Instant::now());
         } else {
             self.partial = None;
@@ -57,6 +136,9 @@ impl Resize {
             .is_some_and(|t| now.duration_since(t) > Duration::from_secs(10))
         {
             return Err("display channel fragment timed out".into());
+        }
+        if !self.enabled {
+            return Ok(None);
         }
         if self.observed.is_none_or(|(s, _)| s != desired) {
             self.observed = Some((desired, now));
@@ -105,6 +187,60 @@ impl Resize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn graphics_channel_updates_desktop_and_replies_with_resize_disabled() {
+        let mut r = Resize::with_graphics(1002, 1004, false);
+        let mut desktop = Session::new(1002, 1003).unwrap();
+        let receive = |r: &mut Resize, desktop: &mut Session, data: &[u8]| {
+            let mut svc = (data.len() as u32).to_le_bytes().to_vec();
+            svc.extend(3u32.to_le_bytes());
+            svc.extend(data);
+            r.receive(&svc, desktop).unwrap()
+        };
+        receive(&mut r, &mut desktop, &[0x50, 0, 1, 0]);
+        let mut open = vec![0x10, 9];
+        open.extend(b"Microsoft::Windows::RDS::Graphics\0");
+        assert_eq!(receive(&mut r, &mut desktop, &open).len(), 2);
+        let mut graphics = Vec::new();
+        let mut pdu = |kind: u16, body: &[u8]| {
+            graphics.extend(kind.to_le_bytes());
+            graphics.extend(0u16.to_le_bytes());
+            graphics.extend(((body.len() + 8) as u32).to_le_bytes());
+            graphics.extend(body);
+        };
+        pdu(0x13, &[5, 1, 8, 0, 4, 0, 0, 0, 0x12, 0, 0, 0]);
+        let mut reset = vec![0; 332];
+        reset[0] = 4;
+        reset[4] = 4;
+        reset[8] = 1;
+        reset[20] = 3;
+        reset[24] = 3;
+        reset[28] = 1;
+        pdu(0xe, &reset);
+        pdu(9, &[1, 0, 4, 0, 4, 0, 0x20]);
+        pdu(0xf, &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        pdu(0xb, &[0, 0, 0, 0, 7, 0, 0, 0]);
+        pdu(
+            4,
+            &[1, 0, 0x56, 0x34, 0x12, 0, 1, 0, 0, 0, 0, 0, 4, 0, 4, 0],
+        );
+        pdu(0xc, &[7, 0, 0, 0]);
+        let mut message = vec![0x30, 9, 0xe0, 4];
+        message.extend(graphics);
+        assert_eq!(receive(&mut r, &mut desktop, &message).len(), 1);
+        assert_eq!(
+            (desktop.framebuffer.width, desktop.framebuffer.height),
+            (4, 4)
+        );
+        assert_eq!(desktop.framebuffer.pixels, vec![0x123456; 16]);
+        assert_eq!(desktop.revision, 1);
+        assert!(!r.waiting());
+        assert!(
+            r.poll(Instant::now(), (800, 600), (4, 4), true, true)
+                .unwrap()
+                .is_none()
+        );
+    }
     fn ready() -> Resize {
         let mut r = Resize::new(1004, 1005);
         r.control.receive(&[0x50, 0, 1, 0]).unwrap();

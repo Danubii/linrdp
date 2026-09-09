@@ -13,6 +13,9 @@ Options to set the port, initial size, dynamic resolution, clipboard sharing,
 and certificate trust. Trust uses system roots by default; an advanced connection
 can select a CA file. Manual certificate fingerprints remain available to the
 explicit command-line interface, not as a terminal-form field.
+On the H.264 branch, Options also includes an H.264 switch, off by default.
+It requests the experimental graphics profile and is saved with the connection;
+the server still selects the actual codec. See [H.264](h264.md).
 
 When default system trust rejects only an unknown issuer or a certificate name
 mismatch, the terminal interface opens a fresh credential-free RDP/TLS probe. It

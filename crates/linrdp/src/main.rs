@@ -24,7 +24,7 @@ Usage: linrdp probe <host> [port]
        linrdp nla-probe <host> [port] [trust-option]
        linrdp login <host> [port] --user <username|DOMAIN\\username> [trust-option]
        linrdp session-probe <host> [port] --user <username> [trust-option]
-       linrdp connect <host> [port] --user <username> [trust-option] [--size WIDTHxHEIGHT] [--dynamic-resolution on|off] [--clipboard on|off]
+       linrdp connect <host> [port] --user <username> [trust-option] [--size WIDTHxHEIGHT] [--dynamic-resolution on|off] [--clipboard on|off] [--graphics bitmap|h264]
        linrdp tui
        linrdp --help
        linrdp --version
@@ -36,6 +36,8 @@ nla-probe requests an NTLM challenge without credentials.
 login prompts locally for a hidden password after TLS verification, then
 attempts NTLM CredSSP once. session-probe continues with MCS/GCC and channel
 setup after login, then disconnects. connect opens an interactive desktop window.
+Graphics defaults to bitmap. --graphics h264 requests experimental AVC420;
+the server selects the actual codec. H.264 can also be enabled in TUI Options.
 connect defaults to 1024x768, dynamic resolution on, and clipboard on
 (Wayland text and file copy/paste). --size selects the initial dimensions;
 later window resizing uses Display Control when the server makes it available,
@@ -326,6 +328,7 @@ fn run_with_tls_hook(
                                     height: options.size.unwrap_or((1024, 768)).1,
                                     clipboard: options.clipboard,
                                     dynamic_resolution: options.dynamic_resolution,
+                                    h264: options.h264,
                                     ..Default::default()
                                 },
                             )?;
@@ -365,6 +368,7 @@ struct Options {
     size: Option<(u16, u16)>,
     clipboard: bool,
     dynamic_resolution: bool,
+    h264: bool,
     user: Option<String>,
     host: String,
     port: u16,
@@ -393,6 +397,7 @@ impl Options {
             size: None,
             clipboard: args[0] == "connect",
             dynamic_resolution: args[0] == "connect",
+            h264: false,
             user: None,
             host: args[1].clone(),
             port: 3389,
@@ -412,6 +417,7 @@ impl Options {
         }
         let mut clipboard_set = false;
         let mut dynamic_set = false;
+        let mut graphics_set = false;
         while !rest.is_empty() {
             if rest.len() < 2 {
                 return Err(format!("invalid arguments\n\n{HELP}").into());
@@ -440,6 +446,14 @@ impl Options {
                         _ => return Err("dynamic-resolution must be on or off".into()),
                     };
                     dynamic_set = true;
+                }
+                "--graphics" if options.view && !graphics_set => {
+                    options.h264 = match value.as_str() {
+                        "bitmap" => false,
+                        "h264" => true,
+                        _ => return Err("graphics must be bitmap or h264".into()),
+                    };
+                    graphics_set = true;
                 }
                 "--clipboard" if options.view && !clipboard_set => {
                     options.clipboard = match value.as_str() {
@@ -594,12 +608,36 @@ mod tests {
                 size: None,
                 clipboard: false,
                 dynamic_resolution: false,
+                h264: false,
                 user: None,
                 host: "::1".into(),
                 port: 3390,
                 ca_file: Some("lab.pem".into()),
                 fingerprint: None,
             }
+        );
+    }
+
+    #[test]
+    fn graphics_is_explicit_and_only_valid_for_desktop_connections() {
+        let base = ["connect", "host.example", "--user", "tester"];
+        let parse = |extra: &[&str]| {
+            Options::parse(
+                &base
+                    .iter()
+                    .chain(extra)
+                    .map(|s| (*s).to_owned())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        assert!(!parse(&[]).unwrap().h264);
+        assert!(parse(&["--graphics", "h264"]).unwrap().h264);
+        assert!(!parse(&["--graphics", "bitmap"]).unwrap().h264);
+        assert!(parse(&["--graphics", "avc444"]).is_err());
+        assert!(parse(&["--graphics", "h264", "--graphics", "bitmap"]).is_err());
+        assert!(
+            Options::parse(&["tls", "host.example", "--graphics", "h264"].map(str::to_owned))
+                .is_err()
         );
     }
 

@@ -1,8 +1,8 @@
 # Desktop presentation performance
 
-LinRDP currently negotiates RGB565 bitmap updates with interleaved RLE and
-fast-path output. It does not negotiate H.264, bulk compression or the RDP
-Graphics Pipeline Extension. Client-side presentation optimizations do not
+The default profile negotiates RGB565 bitmap updates with interleaved RLE and
+fast-path output. This branch adds an optional [H.264 graphics profile](h264.md).
+Client-side presentation optimizations do not
 reduce network bandwidth or change the server's encoding rate.
 
 ## Snapshot scheduling
@@ -83,5 +83,6 @@ acknowledgements and compression framing. H.264 modes are selected through
 that extension's capabilities, independently of bitmap-codec capabilities.
 See Microsoft's [graphics capability negotiation specification](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpegfx/31c6e2b1-335b-4a75-9454-bb2309958c21).
 
-That protocol work and optional hardware decoding are future work. LinRDP
-continues to advertise only the codecs it can actually decode.
+The experimental profile implements version 8.1 with software AVC420 decoding.
+Hardware decoding and AVC444 remain future work. See [H.264](h264.md) for the
+supported codecs and limits of current Windows validation.

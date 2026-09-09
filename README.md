@@ -52,6 +52,8 @@ Wayland text and file copy/paste are enabled by default; use `--clipboard off`
 to disable sharing. See [clipboard behavior and limits](docs/clipboard.md) and
 [desktop scope and validation](docs/desktop.md). Local presentation improvements
 and reproducible CPU benchmarks are described in [performance](docs/performance.md).
+This branch also offers experimental `--graphics h264` (or H.264 in TUI Options).
+Bitmap remains the default; see [H.264 negotiation and validation](docs/h264.md).
 
 ## Development
 
