@@ -186,6 +186,8 @@ impl Keyboard {
         let alt = self.held.contains_key(&Key::LeftAlt) || self.held.contains_key(&Key::RightAlt);
         let shift =
             self.held.contains_key(&Key::LeftShift) || self.held.contains_key(&Key::RightShift);
+        let super_key =
+            self.held.contains_key(&Key::LeftSuper) || self.held.contains_key(&Key::RightSuper);
         if down && ctrl && alt && shift && matches!(key, Key::Enter | Key::Escape) {
             self.events.clear();
             // Modifier presses may already have reached the remote desktop in a
@@ -196,7 +198,11 @@ impl Keyboard {
             return;
         }
         if down {
-            if let Some(mut code) = keysym(key, shift) {
+            // RFB carries modifiers separately. For shortcuts, send the base
+            // keysym so Shift+2 remains the physical 2 key rather than '@'.
+            // Text input still uses the layout-produced character below.
+            let shortcut = ctrl || alt || super_key;
+            if let Some(mut code) = keysym(key, shift && !shortcut) {
                 if code < 0xff00 {
                     if let Some(text) = self.pending_text.take() {
                         code = text;
@@ -768,6 +774,31 @@ mod tests {
                 (0xffe1, false),
                 (65, false),
                 (0xff09, false)
+            ]
+        );
+    }
+    #[test]
+    fn modified_shortcuts_use_the_physical_base_keysym() {
+        let mut keyboard = Keyboard::default();
+        keyboard.key(Key::LeftSuper, true);
+        keyboard.key(Key::LeftShift, true);
+        keyboard.key(Key::Key2, true);
+        keyboard.key(Key::Key2, false);
+        let actual: Vec<_> = keyboard
+            .drain()
+            .iter()
+            .map(|event| match event {
+                X11Event::KeyEvent(key) => (key.keycode, key.down),
+                _ => panic!(),
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            [
+                (0xffeb, true),
+                (0xffe1, true),
+                ('2' as u32, true),
+                ('2' as u32, false)
             ]
         );
     }
