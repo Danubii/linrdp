@@ -648,10 +648,15 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                 ..WindowOptions::default()
             },
         )?;
+        // The remote desktop already draws its own pointer. Hiding the local
+        // pointer avoids displaying a second, slightly offset host cursor.
+        window.set_cursor_visibility(false);
         window.set_target_fps(120);
         let keyboard = Arc::new(Mutex::new(Keyboard::default()));
         window.set_input_callback(Box::new(Callback(keyboard.clone())));
         window.set_title("LinRDP — VNC — Ctrl+Alt+Shift+Esc captures keyboard");
+        let clipboard = crate::clipboard::native::Native::new();
+        let mut clipboard_generation = 0u64;
         let mut mask = 0u8;
         let mut position = (0, 0);
         let mut last_refresh = Instant::now();
@@ -696,6 +701,21 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                             VncEvent::DesktopResizeRejected { reason, status } => eprintln!(
                                 "VNC: server rejected desktop resize (reason {reason}, status {status})."
                             ),
+                            VncEvent::Text(text) => {
+                                clipboard_generation = clipboard_generation.wrapping_add(1);
+                                let id = clipboard_generation;
+                                clipboard
+                                    .tx
+                                    .send(crate::clipboard::native::Command::Begin(id))
+                                    .map_err(|_| invalid("VNC clipboard worker stopped"))?;
+                                clipboard
+                                    .tx
+                                    .send(crate::clipboard::native::Command::Publish(
+                                        id,
+                                        crate::clipboard::native::Published::Text(text.clone()),
+                                    ))
+                                    .map_err(|_| invalid("VNC clipboard worker stopped"))?;
+                            }
                             _ => {}
                         }
                         changed |= canvas.event(event)?;
@@ -730,6 +750,23 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                 window.update();
             }
             let focused = window.is_active();
+            clipboard
+                .focused
+                .store(focused, std::sync::atomic::Ordering::Relaxed);
+            while let Ok(selection) = clipboard.rx.try_recv() {
+                match selection {
+                    Ok(crate::clipboard::Selection::Text(text)) => {
+                        runtime.block_on(client.input(X11Event::CopyText(text)))?;
+                    }
+                    Ok(crate::clipboard::Selection::Empty) => {
+                        runtime.block_on(client.input(X11Event::CopyText(String::new())))?;
+                    }
+                    Ok(crate::clipboard::Selection::Files(_)) => {
+                        eprintln!("VNC clipboard supports text; file selections are ignored.");
+                    }
+                    Err(error) => eprintln!("VNC {error}"),
+                }
+            }
             let ctrl = window.is_key_down(Key::LeftCtrl) || window.is_key_down(Key::RightCtrl);
             let alt = window.is_key_down(Key::LeftAlt) || window.is_key_down(Key::RightAlt);
             let shift = window.is_key_down(Key::LeftShift) || window.is_key_down(Key::RightShift);

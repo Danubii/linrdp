@@ -36,8 +36,11 @@ a single-screen SetDesktopSize request after a short debounce. Server-rounded
 sizes do not create request feedback. If the server rejects the request, the
 remote framebuffer is scaled across the complete client window and pointer
 coordinates use that same full-window transform. Wheel deltas are accumulated
-and rate-limited before being translated into VNC button pulses. RDP
-clipboard/file transfer, Display Control and H.264 settings do not apply to VNC.
+and rate-limited before being translated into VNC button pulses. Clipboard text
+is synchronized in both directions through the standard RFB ClientCutText and
+ServerCutText messages. RFB does not define the file-copy protocol used by RDP,
+so VNC file selections are ignored. Display Control and H.264 settings do not
+apply to VNC.
 
 On Wayland, `Ctrl+Alt+Shift+Enter` captures compositor shortcuts for the VNC
 window so combinations such as Super+key reach the remote desktop. The window

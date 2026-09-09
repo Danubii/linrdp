@@ -207,6 +207,9 @@ impl ServerMsg {
                 let mut padding = [0; 3];
                 reader.read_exact(&mut padding).await?;
                 let len = reader.read_u32().await?;
+                if len > 1024 * 1024 {
+                    return Err(VncError::WrongServerMessage);
+                }
                 let mut buffer_str = vec![0; len as usize];
                 reader.read_exact(&mut buffer_str).await?;
                 Ok(Self::ServerCutText(
@@ -256,5 +259,15 @@ mod tests {
             actual,
             [255, 0, 0, 1, 0, 0, 0, b'2', 0, 0, 0, 3]
         );
+    }
+
+    #[tokio::test]
+    async fn server_cut_text_is_bounded_before_allocating_payload() {
+        let mut message = vec![3, 0, 0, 0];
+        message.extend_from_slice(&(1024u32 * 1024 + 1).to_be_bytes());
+        assert!(matches!(
+            ServerMsg::read(&mut message.as_slice()).await,
+            Err(VncError::WrongServerMessage)
+        ));
     }
 }

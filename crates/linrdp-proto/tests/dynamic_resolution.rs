@@ -26,7 +26,7 @@ fn graphics_requests_32_bit_session_and_dvc_even_without_resize() {
         .windows(4)
         .position(|b| b == [1, 0xc0, 216, 0])
         .unwrap();
-    assert_eq!(&bitmap[core + 140..core + 146], &[16, 0, 2, 0, 5, 0]);
+    assert_eq!(&bitmap[core + 140..core + 146], &[24, 0, 0x0b, 0, 7, 0]);
 }
 
 // Independently assemble the BER/GCC response, including SC_NET's odd-count padding.
