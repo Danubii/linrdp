@@ -40,6 +40,7 @@ pub struct Response {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
+    VncServer,
     Malformed(&'static str),
     LegacySecurity,
     UnofferedProtocol(u32),
@@ -49,6 +50,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::VncServer => f.write_str("the server speaks VNC (RFB); LinRDP currently supports RDP only. Use an RDP-enabled host and its RDP port"),
             Self::Malformed(reason) => write!(f, "invalid RDP negotiation: {reason}"),
             Self::LegacySecurity => {
                 f.write_str("server selected legacy RDP security; refusing downgrade")
@@ -79,6 +81,9 @@ impl std::error::Error for Error {}
 /// Validate a connection-confirm header before allocating or reading its body.
 /// This phase accepts only a bare 11-byte confirm or a 19-byte negotiation PDU.
 pub fn confirm_length(header: [u8; 4]) -> Result<usize, Error> {
+    if header == *b"RFB " {
+        return Err(Error::VncServer);
+    }
     if header[0] != 3 || header[1] != 0 {
         return Err(Error::Malformed("invalid TPKT version or reserved byte"));
     }
@@ -228,5 +233,16 @@ mod tests {
                 matches!(length, 11 | 19)
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod service_detection_tests {
+    use super::*;
+    #[test]
+    fn vnc_banner_has_an_actionable_error() {
+        assert_eq!(confirm_length(*b"RFB "), Err(Error::VncServer));
+        assert!(Error::VncServer.to_string().contains("RDP only"));
+        assert!(matches!(confirm_length(*b"HTTP"), Err(Error::Malformed(_))));
     }
 }

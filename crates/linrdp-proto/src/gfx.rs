@@ -553,7 +553,7 @@ impl Gfx {
             }
             let width = 64.min(s.buffer.width as usize - x);
             let height = 64.min(s.buffer.height as usize - y);
-            for r in &masks {
+            for r in &masks[tile.region_index] {
                 let left = x.max(r.l);
                 let top = y.max(r.t);
                 let right = (x + width).min(r.r);
@@ -654,7 +654,7 @@ fn pdu(cmd: u16, b: &[u8]) -> Vec<u8> {
     out.extend(b);
     out
 }
-fn progressive_masks(data: &[u8], w: usize, h: usize) -> Result<Vec<Rect>> {
+fn progressive_masks(data: &[u8], w: usize, h: usize) -> Result<Vec<Vec<Rect>>> {
     use ironrdp_pdu::codecs::rfx::progressive::{ProgressiveBlock, decode_progressive_stream};
     let mut cursor = Cursor(data);
     let mut block_count = 0;
@@ -692,6 +692,7 @@ fn progressive_masks(data: &[u8], w: usize, h: usize) -> Result<Vec<Rect>> {
             if tiles > 4096 {
                 return Err(bad("progressive tile count limit"));
             }
+            let mut region_masks = Vec::new();
             for rect in &region.rects {
                 let r = Rect {
                     l: rect.x as usize,
@@ -703,8 +704,9 @@ fn progressive_masks(data: &[u8], w: usize, h: usize) -> Result<Vec<Rect>> {
                 if masks.len() >= 4096 {
                     return Err(bad("progressive region limit"));
                 }
-                masks.push(r);
+                region_masks.push(r);
             }
+            masks.push(region_masks);
         }
     }
     Ok(masks)
@@ -1040,6 +1042,83 @@ mod tests {
             send(&mut g, 3, &[1, 0, 7, 0, 0, 0]).unwrap();
             assert!(g.surface(1).unwrap().contexts.is_empty());
         }
+    }
+    #[test]
+    fn progressive_regions_do_not_overwrite_each_others_pixels() {
+        use ironrdp_pdu::codecs::rfx::progressive::{
+            ComponentCodecQuant, ProgressiveBlock, ProgressiveRegion, ProgressiveTile, TileSimple,
+            encode_progressive_stream,
+        };
+        use ironrdp_pdu::codecs::rfx::{EntropyAlgorithm, RfxRectangle};
+        let encode = |value| {
+            let mut coeff = [0i16; 4096];
+            coeff[4032] = value;
+            let mut out = vec![0; 32768];
+            let n =
+                ironrdp_graphics::rlgr::encode(EntropyAlgorithm::Rlgr1, &coeff, &mut out).unwrap();
+            out.truncate(n);
+            out
+        };
+        let zero = encode(0);
+        let light = encode(32);
+        let lighter = encode(64);
+        let region = |x, y_data| {
+            ProgressiveBlock::Region(ProgressiveRegion {
+                tile_size: 64,
+                flags: 0,
+                rects: vec![RfxRectangle {
+                    x,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                }],
+                quant_vals: vec![ComponentCodecQuant {
+                    ll3: 1,
+                    hl3: 1,
+                    lh3: 1,
+                    hh3: 1,
+                    hl2: 1,
+                    lh2: 1,
+                    hh2: 1,
+                    hl1: 1,
+                    lh1: 1,
+                    hh1: 1,
+                }],
+                quant_prog_vals: vec![],
+                tiles: vec![ProgressiveTile::Simple(TileSimple {
+                    quant_idx_y: 0,
+                    quant_idx_cb: 0,
+                    quant_idx_cr: 0,
+                    x_idx: 0,
+                    y_idx: 0,
+                    flags: 0,
+                    y_data,
+                    cb_data: &zero,
+                    cr_data: &zero,
+                    tail_data: &[],
+                })],
+            })
+        };
+        let mut reused = region(2, &lighter);
+        if let ProgressiveBlock::Region(r) = &mut reused {
+            r.tiles.clear();
+        }
+        let data =
+            encode_progressive_stream(&[region(0, &light), region(1, &lighter), reused]).unwrap();
+        let mut g = setup();
+        fill(&mut g, 0x123456);
+        let mut body = 1u16.to_le_bytes().to_vec();
+        body.extend(9u16.to_le_bytes());
+        body.extend(7u32.to_le_bytes());
+        body.push(0x20);
+        body.extend((data.len() as u32).to_le_bytes());
+        body.extend(data);
+        send(&mut g, 2, &body).unwrap();
+        let p = &g.surface(1).unwrap().buffer.pixels;
+        assert_eq!(p[0], 0x818181, "second region overwrote first region");
+        assert_eq!(p[1], 0x828282);
+        assert_eq!(p[2], 0x828282, "region failed to reuse previous tile");
+        assert_eq!(p[3], 0x123456);
     }
     #[test]
     fn avc_masks_preserve_lossless_pixels() {

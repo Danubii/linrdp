@@ -15,6 +15,7 @@ fn bad(s: impl Into<String>) -> Error {
     Error(s.into())
 }
 pub struct DecodedTile {
+    pub region_index: usize,
     pub x_idx: u16,
     pub y_idx: u16,
     pub pixels: Vec<u8>,
@@ -84,6 +85,7 @@ impl ProgressiveDecoder {
         // survive changes/deletion of transient bitmap encoding contexts.
         let ctx = &mut self.context;
         let mut out = Vec::new();
+        let mut region_index = 0;
         for block in blocks {
             match block {
                 ProgressiveBlock::Context(c) => {
@@ -155,12 +157,42 @@ impl ProgressiveDecoder {
                             }
                         }
                         tile.active_context = Some(id);
+                    }
+                    // A region can expose pixels from tiles sent previously.
+                    // Reconstruct only the tiles covered by this region, retaining
+                    // its own clipping masks when handing them to the surface.
+                    let mut visible = std::collections::BTreeSet::new();
+                    for rect in &region.rects {
+                        let right = rect.x as usize + rect.width as usize;
+                        let bottom = rect.y as usize + rect.height as usize;
+                        if right > width as usize || bottom > height as usize {
+                            return Err(bad("progressive region outside surface"));
+                        }
+                        if rect.width == 0 || rect.height == 0 {
+                            continue;
+                        }
+                        for y in rect.y as usize / 64..bottom.div_ceil(64) {
+                            for x in rect.x as usize / 64..right.div_ceil(64) {
+                                visible.insert((x as u16, y as u16));
+                            }
+                        }
+                    }
+                    if out.len() + visible.len() > 4096 {
+                        return Err(bad("progressive reconstructed tile limit"));
+                    }
+                    for (x, y) in visible {
+                        let tile =
+                            ctx.tiles.get(&(x, y)).filter(|t| t.ready).ok_or_else(|| {
+                                bad("progressive region without a reference tile")
+                            })?;
                         out.push(DecodedTile {
+                            region_index,
                             x_idx: x,
                             y_idx: y,
                             pixels: reconstruct(tile)?,
                         });
                     }
+                    region_index += 1;
                 }
                 _ => {}
             }
