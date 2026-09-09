@@ -139,12 +139,9 @@ impl Framebuffer {
                 bytes.0
             };
             for y in 0..usize::from(bottom - top + 1) {
-                // RDP6 planar output is top-down; legacy DIB/RLE rows are bottom-up.
-                let row = if rgb_order {
-                    y
-                } else {
-                    usize::from(height) - 1 - y
-                } * stride;
+                // Bitmap Update rectangles are bottom-up DIBs. The planar
+                // decoder changes channel packing, but preserves that row order.
+                let row = (usize::from(height) - 1 - y) * stride;
                 let dest = (usize::from(top) + y) * usize::from(self.width) + usize::from(left);
                 for x in 0..usize::from(right - left + 1) {
                     let off = row + x * bytes_per_pixel;
@@ -198,13 +195,13 @@ mod tests {
         }
     }
     #[test]
-    fn planar_32_bit_bitmap_preserves_rgb_and_top_down_rows() {
+    fn planar_32_bit_bitmap_preserves_rgb_and_bottom_up_rows() {
         let mut frame = Framebuffer::new(1, 2).unwrap();
         // No alpha, no RLE; R, G, B planes and mandatory raw padding byte.
         frame
             .update(&update(32, 0x0401, &[0x20, 255, 0, 0, 0, 0, 255, 0]))
             .unwrap();
-        assert_eq!(frame.pixels, [0xff0000, 0x0000ff]);
+        assert_eq!(frame.pixels, [0x0000ff, 0xff0000]);
         assert_eq!(frame.updates, 1);
     }
     #[test]
