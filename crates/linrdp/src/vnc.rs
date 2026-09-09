@@ -388,7 +388,7 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
         window.set_target_fps(120);
         let keyboard = Arc::new(Mutex::new(Keyboard::default()));
         window.set_input_callback(Box::new(Callback(keyboard.clone())));
-        window.set_title("LinRDP — VNC — Ctrl+Alt+Shift+Enter captures keyboard");
+        window.set_title("LinRDP — VNC — Ctrl+Alt+Shift+Esc captures keyboard");
         let mut mask = 0u8;
         let mut position = (0, 0);
         let mut last_refresh = Instant::now();
@@ -402,10 +402,9 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
         let mut requested_size = None;
         let mut observed_window_size = window.get_size();
         let mut scroll_accumulator = 0.0;
-        let mut capture_latched = false;
-        let mut release_latched = false;
         let mut capture_requested = false;
         let mut capture_active = false;
+        let mut last_capture_toggle = None;
         while window.is_open() {
             for _ in 0..64 {
                 match runtime.block_on(client.poll_event())? {
@@ -461,17 +460,8 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
             let ctrl = window.is_key_down(Key::LeftCtrl) || window.is_key_down(Key::RightCtrl);
             let alt = window.is_key_down(Key::LeftAlt) || window.is_key_down(Key::RightAlt);
             let shift = window.is_key_down(Key::LeftShift) || window.is_key_down(Key::RightShift);
-            let capture_down = focused && ctrl && alt && shift && window.is_key_down(Key::Enter);
-            let release_down = focused && ctrl && alt && shift && window.is_key_down(Key::Escape);
-            let polled_grab_change = if capture_down && !capture_latched {
-                Some(true)
-            } else if release_down && !release_latched {
-                Some(false)
-            } else {
-                None
-            };
-            capture_latched = capture_down;
-            release_latched = release_down;
+            let capture_toggle_down =
+                focused && ctrl && alt && shift && window.is_key_down(Key::Escape);
             if active && !focused {
                 keyboard
                     .lock()
@@ -497,7 +487,13 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                 let grab_change = keys.take_grab_change();
                 (events, grab_change)
             };
-            if let Some(grabbed) = grab_change.or(polled_grab_change) {
+            let callback_toggle = grab_change.is_some();
+            let toggle_requested = (callback_toggle || capture_toggle_down)
+                && last_capture_toggle
+                    .is_none_or(|last: Instant| last.elapsed() >= Duration::from_millis(350));
+            if toggle_requested {
+                last_capture_toggle = Some(Instant::now());
+                let grabbed = !capture_requested;
                 if window.set_keyboard_shortcuts_inhibited(grabbed) {
                     capture_requested = grabbed;
                     eprintln!(
@@ -507,7 +503,7 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                     window.set_title(if grabbed {
                         "LinRDP — VNC — requesting keyboard capture…"
                     } else {
-                        "LinRDP — VNC — Ctrl+Alt+Shift+Enter captures keyboard"
+                        "LinRDP — VNC — Ctrl+Alt+Shift+Esc captures keyboard"
                     });
                 } else {
                     window.set_title("LinRDP — VNC — keyboard capture unavailable");
@@ -519,14 +515,18 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                 capture_active = inhibited;
                 eprintln!(
                     "VNC: keyboard capture {} by compositor.",
-                    if inhibited { "activated" } else { "deactivated" }
+                    if inhibited {
+                        "activated"
+                    } else {
+                        "deactivated"
+                    }
                 );
                 window.set_title(if inhibited {
-                    "LinRDP — VNC — keyboard captured; Ctrl+Alt+Shift+Esc releases"
+                    "LinRDP — VNC — keyboard captured; Ctrl+Alt+Shift+Esc toggles"
                 } else if capture_requested {
                     "LinRDP — VNC — waiting for keyboard capture…"
                 } else {
-                    "LinRDP — VNC — Ctrl+Alt+Shift+Enter captures keyboard"
+                    "LinRDP — VNC — Ctrl+Alt+Shift+Esc captures keyboard"
                 });
             }
             for event in events {
