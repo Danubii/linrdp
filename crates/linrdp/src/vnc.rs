@@ -1047,6 +1047,13 @@ mod tests {
         );
     }
     #[test]
+    fn linux_keycodes_map_to_qemu_codes_without_xkb_offset() {
+        assert_eq!(qnum_from_evdev(3), Some(3));
+        assert_eq!(qnum_from_evdev(12), Some(12));
+        assert_eq!(qnum_from_evdev(13), Some(13));
+        assert_eq!(qnum_from_evdev(125), Some(0xdb));
+    }
+    #[test]
     fn layout_text_replaces_printable_press_and_matches_release() {
         let mut keyboard = Keyboard::default();
         keyboard.text('æ' as u32);

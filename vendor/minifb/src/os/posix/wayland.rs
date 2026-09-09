@@ -1221,7 +1221,9 @@ impl Window {
                 _ => Key::Unknown,
             };
 
-            key_handler.set_key_state_raw(key_i, is_down, key);
+            // xkbcommon keycodes are Linux evdev codes plus 8. Expose the
+            // original evdev code to consumers that need physical keys.
+            key_handler.set_key_state_raw(key_i, is_down, key - KEY_XKB_OFFSET);
         }
     }
 
