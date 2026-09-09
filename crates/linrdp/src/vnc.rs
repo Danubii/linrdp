@@ -670,6 +670,7 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
         let mut capture_requested = false;
         let mut capture_active = false;
         let mut last_capture_toggle = None;
+        let mut cursor_shape_active = false;
         let mut hyprland_capture = HyprlandCapture::new();
         while window.is_open() {
             for _ in 0..64 {
@@ -712,6 +713,16 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                                         crate::clipboard::native::Published::Text(text.clone()),
                                     ))
                                     .map_err(|_| invalid("VNC clipboard worker stopped"))?;
+                            }
+                            VncEvent::SetCursor(..) if !cursor_shape_active => {
+                                cursor_shape_active = true;
+                                // The first framebuffer may still contain the
+                                // previously server-rendered pointer. Repaint it
+                                // once cursor-shape mode has taken effect.
+                                runtime.block_on(client.input(X11Event::FullRefresh))?;
+                                eprintln!(
+                                    "VNC: server cursor removed; local client cursor remains visible."
+                                );
                             }
                             _ => {}
                         }
