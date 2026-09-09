@@ -259,6 +259,86 @@ mod tests {
                 .is_none()
         );
     }
+    #[test]
+    fn graphics_handoff_survives_resize_and_partial_frame_updates() {
+        fn deliver(r: &mut Resize, desktop: &mut Session, data: &[u8]) -> Vec<Vec<u8>> {
+            let mut svc = (data.len() as u32).to_le_bytes().to_vec();
+            svc.extend(3u32.to_le_bytes());
+            svc.extend(data);
+            r.receive(&svc, desktop).unwrap()
+        }
+        fn pdu(r: &mut Resize, desktop: &mut Session, kind: u16, body: &[u8]) {
+            let mut msg = vec![0x30, 9, 0xe0, 4];
+            msg.extend(kind.to_le_bytes());
+            msg.extend(0u16.to_le_bytes());
+            msg.extend(((body.len() + 8) as u32).to_le_bytes());
+            msg.extend(body);
+            deliver(r, desktop, &msg);
+        }
+        let mut r = Resize::with_graphics(1002, 1004, true);
+        let mut desktop = Session::new(1002, 1003).unwrap();
+        deliver(&mut r, &mut desktop, &[0x50, 0, 1, 0]);
+        let mut open = vec![0x10, 9];
+        open.extend(b"Microsoft::Windows::RDS::Graphics\0");
+        deliver(&mut r, &mut desktop, &open);
+        pdu(
+            &mut r,
+            &mut desktop,
+            0x13,
+            &[5, 1, 8, 0, 4, 0, 0, 0, 0x12, 0, 0, 0],
+        );
+        for (index, size) in [4u16, 8, 2, 4].into_iter().enumerate() {
+            if index > 0 {
+                pdu(&mut r, &mut desktop, 0xa, &1u16.to_le_bytes());
+            }
+            let mut reset = vec![0; 332];
+            reset[..4].copy_from_slice(&(size as u32).to_le_bytes());
+            reset[4..8].copy_from_slice(&(size as u32).to_le_bytes());
+            reset[8] = 1;
+            reset[20..24].copy_from_slice(&(size as u32 - 1).to_le_bytes());
+            reset[24..28].copy_from_slice(&(size as u32 - 1).to_le_bytes());
+            reset[28] = 1;
+            pdu(&mut r, &mut desktop, 0xe, &reset);
+            let mut create = 1u16.to_le_bytes().to_vec();
+            create.extend(size.to_le_bytes());
+            create.extend(size.to_le_bytes());
+            create.push(0x20);
+            pdu(&mut r, &mut desktop, 9, &create);
+            pdu(
+                &mut r,
+                &mut desktop,
+                0xf,
+                &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            );
+            for frame in 0..5u32 {
+                let previous = desktop.framebuffer.pixels.clone();
+                let mut start = 0u32.to_le_bytes().to_vec();
+                start.extend(frame.to_le_bytes());
+                pdu(&mut r, &mut desktop, 0xb, &start);
+                // Change only the first pixel; the other pixels remain the
+                // surface's initial black, even after recycling unrelated buffers.
+                let mut fill = 1u16.to_le_bytes().to_vec();
+                fill.extend((frame + 1).to_le_bytes());
+                for value in [1u16, 0, 0, 1, 1] {
+                    fill.extend(value.to_le_bytes());
+                }
+                pdu(&mut r, &mut desktop, 4, &fill);
+                assert_eq!(desktop.framebuffer.pixels, previous, "open frame leaked");
+                pdu(&mut r, &mut desktop, 0xc, &frame.to_le_bytes());
+                assert_eq!(
+                    (desktop.framebuffer.width, desktop.framebuffer.height),
+                    (size, size)
+                );
+                assert_eq!(
+                    desktop.framebuffer.pixels.len(),
+                    size as usize * size as usize
+                );
+                assert_eq!(desktop.framebuffer.pixels[0], frame + 1);
+                assert!(desktop.framebuffer.pixels[1..].iter().all(|p| *p == 0));
+            }
+        }
+        assert_eq!(desktop.revision, 20);
+    }
     fn ready() -> Resize {
         let mut r = Resize::new(1004, 1005);
         r.control.receive(&[0x50, 0, 1, 0]).unwrap();
