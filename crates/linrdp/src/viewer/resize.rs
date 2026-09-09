@@ -21,6 +21,8 @@ pub(super) struct Resize {
     graphics: Option<Gfx>,
     graphics_revision: u64,
     avc_reported: bool,
+    graphics_work: Duration,
+    graphics_longest_message: Duration,
 }
 impl Drop for Resize {
     fn drop(&mut self) {
@@ -28,6 +30,11 @@ impl Drop for Resize {
             println!(
                 "Graphics session: {} completed frames, {} H.264 updates; codec mask 0x{:x}.",
                 graphics.frames, graphics.avc_frames, graphics.seen_codecs
+            );
+            println!(
+                "Graphics processing: {:.1} ms total; longest message {:.1} ms (decode and composition, excluding network wait).",
+                self.graphics_work.as_secs_f64() * 1000.0,
+                self.graphics_longest_message.as_secs_f64() * 1000.0,
             );
         }
     }
@@ -48,6 +55,8 @@ impl Resize {
             graphics: None,
             graphics_revision: 0,
             avc_reported: false,
+            graphics_work: Duration::ZERO,
+            graphics_longest_message: Duration::ZERO,
         }
     }
     pub fn with_graphics(user: u16, channel: u16, resize: bool) -> Self {
@@ -79,7 +88,14 @@ impl Resize {
                     println!("RDP graphics channel opened; offering H.264 AVC420.");
                     vec![graphics.advertise()]
                 }
-                GraphicsEvent::Data(bytes) => graphics.receive(&bytes)?,
+                GraphicsEvent::Data(bytes) => {
+                    let start = Instant::now();
+                    let result = graphics.receive(&bytes);
+                    let elapsed = start.elapsed();
+                    self.graphics_work += elapsed;
+                    self.graphics_longest_message = self.graphics_longest_message.max(elapsed);
+                    result?
+                }
                 GraphicsEvent::Closed => {
                     *graphics = Gfx::new();
                     self.graphics_revision = 0;
@@ -92,10 +108,12 @@ impl Resize {
                 self.avc_reported = true;
             }
             if graphics.revision != self.graphics_revision {
-                if let Some(frame) = &graphics.output {
+                if let Some(frame) = &mut graphics.output {
                     desktop.framebuffer.width = frame.width;
                     desktop.framebuffer.height = frame.height;
-                    desktop.framebuffer.pixels.clone_from(&frame.pixels);
+                    // GFX reconstructs the next completed output from its surfaces.
+                    // Recycle the previous viewer buffer instead of copying pixels.
+                    std::mem::swap(&mut desktop.framebuffer.pixels, &mut frame.pixels);
                     desktop.framebuffer.updates = desktop.framebuffer.updates.saturating_add(1);
                     desktop.revision = desktop.revision.saturating_add(1);
                     if self.graphics_revision == 0 {

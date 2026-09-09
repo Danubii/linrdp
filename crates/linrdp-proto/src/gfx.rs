@@ -576,15 +576,21 @@ impl Gfx {
         let (w, h) = self
             .dimensions
             .ok_or_else(|| bad("graphics frame before reset"))?;
-        if self
-            .output
-            .as_ref()
-            .is_none_or(|o| o.width != w || o.height != h)
-        {
+        if self.output.as_ref().is_none_or(|o| {
+            o.width != w || o.height != h || o.pixels.len() != w as usize * h as usize
+        }) {
             self.output = Some(Framebuffer::new(w, h)?);
         }
         let out = self.output.as_mut().unwrap();
-        out.pixels.fill(0);
+        // A full-size mapped surface overwrites every pixel. Other layouts
+        // still need clearing so deleted/unmapped areas cannot retain old pixels.
+        let covers_output = self
+            .surfaces
+            .values()
+            .any(|s| s.origin == Some((0, 0)) && s.buffer.width >= w && s.buffer.height >= h);
+        if !covers_output {
+            out.pixels.fill(0);
+        }
         for s in self.surfaces.values() {
             if let Some((x, y)) = s.origin {
                 if x >= w as usize || y >= h as usize {
@@ -745,6 +751,37 @@ mod tests {
         send(g, 0xb, &b).unwrap();
     }
     #[test]
+    #[ignore = "manual release-mode presentation benchmark"]
+    fn benchmark_graphics_presentation() {
+        for (w, h) in [(1920, 1080), (3840, 2160)] {
+            let mut g = Gfx::new();
+            g.dimensions = Some((w, h));
+            let mut buffer = Framebuffer::new(w, h).unwrap();
+            buffer.pixels.fill(0x123456);
+            g.surfaces.insert(
+                1,
+                Surface {
+                    buffer,
+                    origin: Some((0, 0)),
+                    progressive: ProgressiveDecoder::new(),
+                    contexts: Default::default(),
+                },
+            );
+            let mut desktop = Framebuffer::new(w, h).unwrap();
+            g.present().unwrap();
+            let began = std::time::Instant::now();
+            for _ in 0..300 {
+                g.present().unwrap();
+                std::mem::swap(&mut desktop.pixels, &mut g.output.as_mut().unwrap().pixels);
+                std::hint::black_box(&desktop.pixels);
+            }
+            println!(
+                "{w}x{h}: {:.3} ms/frame",
+                began.elapsed().as_secs_f64() * 1000.0 / 300.0
+            );
+        }
+    }
+    #[test]
     fn server_can_decline_avc_without_changing_version() {
         let mut g = Gfx::new();
         let mut caps = Vec::new();
@@ -783,6 +820,30 @@ mod tests {
         assert_eq!(g.output.as_ref().unwrap().pixels[0], 0x123456);
         send(&mut g, 0xc, &43u32.to_le_bytes()).unwrap();
         assert_eq!(g.output.as_ref().unwrap().pixels[0], 0);
+    }
+    #[test]
+    fn presentation_recycles_buffers_and_clears_unmapped_output() {
+        let mut g = setup();
+        fill(&mut g, 0x123456);
+        g.present().unwrap();
+        let mut displayed = Framebuffer::new(2, 2).unwrap();
+        std::mem::swap(
+            &mut displayed.pixels,
+            &mut g.output.as_mut().unwrap().pixels,
+        );
+        // The recycled buffer can have the previous remote resolution.
+        g.present().unwrap();
+        assert_eq!(g.output.as_ref().unwrap().pixels, vec![0x123456; 16]);
+        assert_eq!(displayed.pixels, vec![0x123456; 16]);
+        g.surface_mut(1).unwrap().origin = Some((1, 1));
+        g.present().unwrap();
+        let pixels = &g.output.as_ref().unwrap().pixels;
+        assert_eq!(&pixels[..4], &[0; 4]);
+        assert_eq!(pixels[4], 0);
+        assert_eq!(pixels[5], 0x123456);
+        g.surface_mut(1).unwrap().origin = None;
+        g.present().unwrap();
+        assert_eq!(g.output.as_ref().unwrap().pixels, vec![0; 16]);
     }
     #[test]
     fn fragmented_and_concatenated_pdus() {
