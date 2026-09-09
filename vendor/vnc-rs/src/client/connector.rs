@@ -75,8 +75,10 @@ where
                                 info!("No auth needed in vnc3.8");
                                 SecurityType::write(&SecurityType::None, &mut connector.stream)
                                     .await?;
-                                let mut ok = [0; 4];
-                                connector.stream.read_exact(&mut ok).await?;
+                                let result = connector.stream.read_u32().await?;
+                                if result != 0 {
+                                    return Err(VncError::General(format!("VNC server rejected unauthenticated access (status {result})")));
+                                }
                             }
                         }
                     } else {

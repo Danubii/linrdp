@@ -46,7 +46,9 @@ impl SecurityType {
         match version {
             VncVersion::RFB33 => {
                 let security_type = reader.read_u32().await?;
-                let security_type = (security_type as u8).try_into()?;
+                let security_type = u8::try_from(security_type)
+                    .map_err(|_| VncError::General(format!("Unsupported RFB 3.3 security type: {security_type}")))?
+                    .try_into()?;
                 if let SecurityType::Invalid = security_type {
                     let _ = reader.read_u32().await?;
                     let mut err_msg = String::new();
@@ -71,9 +73,14 @@ impl SecurityType {
                     reader.read_to_string(&mut err_msg).await?;
                     return Err(VncError::General(err_msg));
                 }
-                let mut sec_types = vec![];
-                for _ in 0..num {
-                    sec_types.push(reader.read_u8().await?.try_into()?);
+                let mut offered = vec![0; num as usize];
+                reader.read_exact(&mut offered).await?;
+                let sec_types: Vec<Self> = offered.iter().copied()
+                    .filter_map(|value| Self::try_from(value).ok()).collect();
+                if !sec_types.contains(&Self::None) && !sec_types.contains(&Self::VncAuth) {
+                    return Err(VncError::General(format!(
+                        "No supported VNC authentication method. Server offered security types {offered:?}; this client supports None (1) and VNC password (2)"
+                    )));
                 }
                 tracing::trace!("Server supported security type: {:?}", sec_types);
                 Ok(sec_types)
@@ -99,7 +106,7 @@ pub(super) enum AuthResult {
 
 impl From<u32> for AuthResult {
     fn from(num: u32) -> Self {
-        unsafe { std::mem::transmute(num) }
+        if num == 0 { Self::Ok } else { Self::Failed }
     }
 }
 
@@ -155,5 +162,27 @@ impl AuthHelper {
     {
         let result = reader.read_u32().await?;
         Ok(result.into())
+    }
+}
+
+#[cfg(test)]
+mod negotiation_tests {
+    use super::*;
+    #[test]
+    fn unknown_offers_do_not_hide_supported_authentication() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            for wire in [&[3,129,2,1][..], &[3,2,129,1][..], &[3,2,1,129][..]] {
+                let mut input = wire;
+                let types = SecurityType::read(&mut input, &VncVersion::RFB38).await.unwrap();
+                assert!(types.contains(&SecurityType::VncAuth));
+                assert!(types.contains(&SecurityType::None));
+                assert!(input.is_empty());
+            }
+            let error = SecurityType::read(&mut &[2,129,19][..], &VncVersion::RFB38).await.unwrap_err();
+            assert!(error.to_string().contains("[129, 19]"));
+            assert!(SecurityType::read(&mut &[2,129][..], &VncVersion::RFB38).await.is_err());
+            assert!(SecurityType::read(&mut &[0,0,1,2][..], &VncVersion::RFB33).await.is_err());
+            assert!(matches!(AuthResult::from(2), AuthResult::Failed));
+        });
     }
 }

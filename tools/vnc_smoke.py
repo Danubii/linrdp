@@ -18,14 +18,14 @@ def read(n):
  return b
 c.sendall(b'RFB 003.008\n');assert read(12)==b'RFB 003.008\n'
 if '--auth' in sys.argv:
- c.sendall(b'\x01\x02');assert read(1)==b'\x02'
+ c.sendall(b'\x02\x81\x02' if '--unknown' in sys.argv else b'\x01\x02');assert read(1)==b'\x02'
  challenge=bytes(range(16));c.sendall(challenge)
  key=bytes(int(f'{b:08b}'[::-1],2) for b in b'fixture\0')
  expected=subprocess.run(['openssl','enc','-des-ecb','-provider','legacy','-provider','default','-K',key.hex(),'-nopad'],input=challenge,capture_output=True,check=True).stdout
  assert read(16)==expected,'incorrect VNC challenge response'
  print('VNC authentication verified',flush=True)
 else:
- c.sendall(b'\x01\x01');assert read(1)==b'\x01'
+ c.sendall(b'\x02\x81\x01' if '--unknown' in sys.argv else b'\x01\x01');assert read(1)==b'\x01'
 c.sendall(bytes(4));assert read(1)==b'\x01'
 pf=struct.pack('>BBBBHHHBBBxxx',32,24,0,1,255,255,255,16,8,0)
 c.sendall(struct.pack('>HH',64,64)+pf+struct.pack('>I',16)+b'LinRDP VNC smoke')

@@ -44,3 +44,11 @@ and connect to the printed loopback port. Add `--auth` to test password
 authentication with the synthetic password `fixture` (requires OpenSSL with
 its legacy provider). Close the client window after the blue desktop appears.
 The fixture checks that refresh requests use the new size after server resize.
+
+Servers may offer vendor-specific security types alongside standard ones. The
+client now reads the whole list and selects a supported method instead of failing
+on an unknown alternative. A loopback `[129, 2]` offer successfully completed
+password authentication, rendering and resize. An offer without type 1 or 2
+still fails explicitly with the full numeric list; this does not implement
+security type 129 itself. Vendor type assignments can overlap; see the
+[IANA RFB registry](https://www.iana.org/assignments/rfb).
