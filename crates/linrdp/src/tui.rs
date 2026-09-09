@@ -61,12 +61,11 @@ pub fn run(message: Option<String>, initial: Option<&[String]>) -> Result<Outcom
             Command::Persist => match store.save(&app.profiles) {
                 Ok(()) => {
                     persisted.clone_from(&app.profiles);
-                    app.status = "Saved connections updated.".into();
                 }
                 Err(error) => {
                     app.profiles.clone_from(&persisted);
                     app.selected = app.selected.min(app.profiles.len().saturating_sub(1));
-                    app.editing = None;
+                    app.editing = app.profiles.get(app.selected).map(|_| app.selected);
                     app.status = format!("Could not save; no changes kept: {error}");
                 }
             },
@@ -228,7 +227,7 @@ enum Focus {
     Options,
     Save,
     SaveAs,
-    Edit,
+    New,
     Delete,
     Port,
     Size,
@@ -373,14 +372,20 @@ enum Command {
 
 impl App {
     fn new(profiles: Vec<Profile>, message: Option<String>, initial: Option<&[String]>) -> Self {
+        let focus = if profiles.is_empty() {
+            Focus::Computer
+        } else {
+            Focus::Saved
+        };
         let mut app = Self {
             profiles,
             selected: 0,
             form: Form::default(),
-            focus: Focus::Computer,
+            focus,
             advanced: false,
-            status: message
-                .unwrap_or_else(|| "Tab moves · Enter chooses · Ctrl+U clears · Esc quits".into()),
+            status: message.unwrap_or_else(|| {
+                "Tab/Arrows move · Enter chooses · Ctrl+S saves · Ctrl+N creates · Esc quits".into()
+            }),
             modal: None,
             editing: None,
         };
@@ -417,26 +422,26 @@ impl App {
     fn focuses(&self) -> &'static [Focus] {
         const BASIC: &[Focus] = &[
             Focus::Saved,
-            Focus::Computer,
             Focus::Protocol,
+            Focus::Computer,
             Focus::User,
             Focus::Connect,
             Focus::Options,
             Focus::Save,
             Focus::SaveAs,
-            Focus::Edit,
+            Focus::New,
             Focus::Delete,
         ];
         const ADVANCED: &[Focus] = &[
             Focus::Saved,
-            Focus::Computer,
             Focus::Protocol,
+            Focus::Computer,
             Focus::User,
             Focus::Connect,
             Focus::Options,
             Focus::Save,
             Focus::SaveAs,
-            Focus::Edit,
+            Focus::New,
             Focus::Delete,
             Focus::Port,
             Focus::Size,
@@ -447,15 +452,15 @@ impl App {
             Focus::TrustValue,
         ];
         const VNC: &[Focus] = &[
-            Focus::User,
             Focus::Saved,
-            Focus::Computer,
             Focus::Protocol,
+            Focus::Computer,
+            Focus::User,
             Focus::Connect,
             Focus::Options,
             Focus::Save,
             Focus::SaveAs,
-            Focus::Edit,
+            Focus::New,
             Focus::Delete,
             Focus::Port,
         ];
@@ -499,6 +504,12 @@ impl App {
             }
             return Command::None;
         }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('n') {
+            return self.new_connection();
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
+            return self.save();
+        }
         match key.code {
             KeyCode::Esc => Command::Quit,
             KeyCode::Tab => {
@@ -517,6 +528,30 @@ impl App {
                 if self.selected + 1 < self.profiles.len() {
                     self.selected += 1;
                 }
+                Command::None
+            }
+            KeyCode::Home if self.focus == Focus::Saved => {
+                self.selected = 0;
+                Command::None
+            }
+            KeyCode::End if self.focus == Focus::Saved => {
+                self.selected = self.profiles.len().saturating_sub(1);
+                Command::None
+            }
+            KeyCode::PageUp if self.focus == Focus::Saved => {
+                self.selected = self.selected.saturating_sub(10);
+                Command::None
+            }
+            KeyCode::PageDown if self.focus == Focus::Saved => {
+                self.selected = (self.selected + 10).min(self.profiles.len().saturating_sub(1));
+                Command::None
+            }
+            KeyCode::Up | KeyCode::Left if self.active_text().is_none() => {
+                self.move_focus(true);
+                Command::None
+            }
+            KeyCode::Down | KeyCode::Right if self.active_text().is_none() => {
+                self.move_focus(false);
                 Command::None
             }
             KeyCode::Enter => self.activate(),
@@ -549,25 +584,15 @@ impl App {
             Focus::Saved => {
                 if let Some(profile) = self.profiles.get(self.selected) {
                     self.form = Form::from_profile(profile);
-                    self.editing = None;
-                    self.status = format!("Loaded {}.", profile.name);
-                    self.focus = Focus::Computer;
-                } else {
-                    self.status = "No saved connection selected.".into();
-                }
-                Command::None
-            }
-            Focus::Edit => {
-                if let Some(profile) = self.profiles.get(self.selected) {
-                    self.form = Form::from_profile(profile);
                     self.editing = Some(self.selected);
-                    self.status = format!("Editing {}. Choose Save when finished.", profile.name);
+                    self.status = format!("Editing {}. Update saves changes.", profile.name);
                     self.focus = Focus::Computer;
                 } else {
                     self.status = "No saved connection selected.".into();
                 }
                 Command::None
             }
+            Focus::New => self.new_connection(),
             Focus::Connect => match self.form.profile("Current connection".into()) {
                 Ok(profile) => Command::Connect(profile.arguments()),
                 Err(error) => {
@@ -579,16 +604,7 @@ impl App {
                 self.advanced = !self.advanced;
                 Command::None
             }
-            Focus::Save => {
-                self.modal = Some(Modal::Name {
-                    value: self
-                        .editing
-                        .and_then(|index| self.profiles.get(index))
-                        .map_or_else(String::new, |profile| profile.name.clone()),
-                    replace: self.editing,
-                });
-                Command::None
-            }
+            Focus::Save => self.save(),
             Focus::SaveAs => {
                 self.modal = Some(Modal::Name {
                     value: String::new(),
@@ -636,13 +652,52 @@ impl App {
         }
     }
 
+    fn new_connection(&mut self) -> Command {
+        self.form = Form::default();
+        self.editing = None;
+        self.advanced = false;
+        self.focus = Focus::Computer;
+        self.status = "New connection. Enter a computer name or address.".into();
+        Command::None
+    }
+
+    fn save(&mut self) -> Command {
+        if let Some(index) = self.editing {
+            let Some(name) = self.profiles.get(index).map(|profile| profile.name.clone()) else {
+                self.editing = None;
+                self.status = "The connection no longer exists. Save it with a new name.".into();
+                return Command::None;
+            };
+            match self.form.profile(name.clone()) {
+                Ok(profile) => {
+                    self.profiles[index] = profile;
+                    self.selected = index;
+                    self.status = format!("Updated {name}.");
+                    Command::Persist
+                }
+                Err(error) => {
+                    self.status = format!("Could not update: {error}");
+                    Command::None
+                }
+            }
+        } else {
+            self.modal = Some(Modal::Name {
+                value: String::new(),
+                replace: None,
+            });
+            Command::None
+        }
+    }
+
     fn modal_key(&mut self, mut modal: Modal, key: KeyEvent) -> Command {
         match (&mut modal, key.code) {
             (_, KeyCode::Esc) => Command::None,
             (Modal::Delete, KeyCode::Char('y') | KeyCode::Char('Y')) => {
+                let name = self.profiles[self.selected].name.clone();
                 self.profiles.remove(self.selected);
                 self.selected = self.selected.min(self.profiles.len().saturating_sub(1));
                 self.editing = None;
+                self.status = format!("Deleted {name}.");
                 Command::Persist
             }
             (Modal::Delete, _) => {
@@ -667,7 +722,8 @@ impl App {
                             self.profiles.push(profile);
                             self.selected = self.profiles.len() - 1;
                         }
-                        self.editing = None;
+                        self.editing = Some(self.selected);
+                        self.status = format!("Saved {}.", self.profiles[self.selected].name);
                         Command::Persist
                     }
                     Err(error) => {
@@ -739,17 +795,29 @@ impl App {
             let (start, end) = self.visible_profiles(height);
             for (row, index) in (start..end).enumerate() {
                 let profile = &self.profiles[index];
+                let label = if self.editing == Some(index) {
+                    format!("> {}", profile.name)
+                } else {
+                    format!("  {}", profile.name)
+                };
                 field(
                     out,
                     3,
                     6 + row as u16,
                     23,
-                    &profile.name,
+                    &label,
                     self.focus == Focus::Saved && self.selected == index,
                 )?;
             }
         }
-        line(out, 29, 4, "Connection", true)?;
+        let connection_heading = self
+            .editing
+            .and_then(|index| self.profiles.get(index))
+            .map_or_else(
+                || "New connection".into(),
+                |profile| format!("Edit {}", profile.name),
+            );
+        line(out, 29, 4, &fit(&connection_heading, 27), true)?;
         button(
             out,
             58,
@@ -801,7 +869,7 @@ impl App {
             self.focus == Focus::Save,
         )?;
         button(out, 41, 12, "Save as", self.focus == Focus::SaveAs)?;
-        button(out, 55, 12, "Edit", self.focus == Focus::Edit)?;
+        button(out, 55, 12, "New", self.focus == Focus::New)?;
         button(out, 65, 12, "Delete", self.focus == Focus::Delete)?;
         if self.advanced {
             labeled(
@@ -885,7 +953,7 @@ impl App {
         if let Some(modal) = &self.modal {
             let prompt = match modal {
                 Modal::Name { value, .. } => {
-                    format!("Save as: {value}_   Enter saves · Esc cancels")
+                    format!("Connection name: {value}_   Enter saves · Esc cancels")
                 }
                 Modal::Delete => format!(
                     "Delete {}? Press y to confirm · Esc cancels",
@@ -1146,7 +1214,7 @@ mod tests {
         }
         assert_eq!(app.key(key(KeyCode::Enter)), Command::Persist);
 
-        app.focus = Focus::Edit;
+        app.focus = Focus::Saved;
         app.key(key(KeyCode::Enter));
         assert_eq!(app.editing, Some(0));
         app.focus = Focus::User;
@@ -1154,7 +1222,6 @@ mod tests {
         app.key(key(KeyCode::Char('x')));
         assert_eq!(app.form.user, "tester x");
         app.focus = Focus::Save;
-        app.key(key(KeyCode::Enter));
         assert_eq!(app.key(key(KeyCode::Enter)), Command::Persist);
         assert_eq!(app.profiles.len(), 1);
         assert_eq!(app.profiles[0].user, "tester x");
@@ -1175,6 +1242,49 @@ mod tests {
         assert_eq!(app.key(key(KeyCode::Enter)), Command::Persist);
         assert_eq!(app.profiles.len(), 2);
         assert_eq!(app.profiles[1].name, "Copy");
+        assert_eq!(app.editing, Some(1));
+    }
+
+    #[test]
+    fn navigation_starts_at_saved_profiles_and_follows_screen_order() {
+        let form = Form {
+            computer: "host.example".into(),
+            user: "tester".into(),
+            ..Form::default()
+        };
+        let profile = form.profile("Work".into()).unwrap();
+        let mut app = App::new(vec![profile], None, None);
+        assert_eq!(app.focus, Focus::Saved);
+        app.key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Protocol);
+        app.key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Computer);
+        app.key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::User);
+        app.key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Connect);
+    }
+
+    #[test]
+    fn save_and_new_shortcuts_update_the_active_profile() {
+        let mut app = App::new(Vec::new(), None, None);
+        complete(&mut app);
+        app.focus = Focus::Save;
+        app.key(key(KeyCode::Enter));
+        for character in "Work".chars() {
+            app.key(key(KeyCode::Char(character)));
+        }
+        assert_eq!(app.key(key(KeyCode::Enter)), Command::Persist);
+        app.form.user = "updated".into();
+        let save = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert_eq!(app.key(save), Command::Persist);
+        assert_eq!(app.profiles[0].user, "updated");
+
+        let new = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL);
+        assert_eq!(app.key(new), Command::None);
+        assert_eq!(app.focus, Focus::Computer);
+        assert!(app.form.computer.is_empty());
+        assert_eq!(app.editing, None);
     }
 
     #[test]
@@ -1210,7 +1320,7 @@ mod tests {
         app.profiles
             .push(app.form.profile("Second".into()).unwrap());
         app.selected = 1;
-        app.focus = Focus::Edit;
+        app.focus = Focus::Saved;
         app.key(key(KeyCode::Enter));
         assert_eq!(app.editing, Some(1));
         app.focus = Focus::Delete;
@@ -1218,7 +1328,7 @@ mod tests {
         assert_eq!(app.key(key(KeyCode::Char('y'))), Command::Persist);
         assert_eq!(app.editing, None);
         app.focus = Focus::Save;
-        app.key(key(KeyCode::Enter));
+        assert!(matches!(app.key(key(KeyCode::Enter)), Command::None));
         assert!(matches!(app.modal, Some(Modal::Name { replace: None, .. })));
     }
 
