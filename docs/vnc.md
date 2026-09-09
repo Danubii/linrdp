@@ -24,9 +24,11 @@ requested locally only when needed and is never accepted on the command line.
 
 System-trusted X.509 certificates require no prompt. For an otherwise valid
 self-signed, unknown-issuer or hostname-mismatched certificate, the client shows
-its SHA-256 fingerprint and validity period and requires interactive approval for
-that connection before sending credentials. Expired and not-yet-valid
-certificates are rejected. Anonymous VeNCrypt TLS encrypts the connection but
+its SHA-256 fingerprint and validity period and requires interactive approval
+before sending credentials. Approval is saved for that exact host and port in
+the same private `known_hosts.json` store used by RDP, so later connections do
+not prompt again. A changed certificate is rejected without replacing the saved
+fingerprint. Expired and not-yet-valid certificates are rejected. Anonymous VeNCrypt TLS encrypts the connection but
 cannot authenticate the server, and the client reports this explicitly.
 
 When the server advertises ExtendedDesktopSize, stable local window changes send

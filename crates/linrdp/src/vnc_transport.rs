@@ -101,7 +101,7 @@ fn may_approve_certificate_error(code: i32) -> bool {
     // hostname mismatch and IP mismatch. Validity errors are intentionally absent.
     matches!(code, 18 | 19 | 20 | 21 | 62 | 64)
 }
-async fn vencrypt(mut stream: Stream, host: &str, user: Option<&str>) -> Result<Stream> {
+async fn vencrypt(mut stream: Stream, host: &str, port: u16, user: Option<&str>) -> Result<Stream> {
     let version = read::<2>(&mut stream).await?;
     if version < [0, 2] {
         return Err(bad("VeNCrypt 0.2 or newer is required"));
@@ -169,13 +169,16 @@ async fn vencrypt(mut stream: Stream, host: &str, user: Option<&str>) -> Result<
         if cert.not_before().compare(&now)?.is_gt() || cert.not_after().compare(&now)?.is_lt() {
             return Err(bad("VNC server certificate is expired or not yet valid"));
         }
-        if deferred.load(Ordering::Relaxed) {
-            let fingerprint = cert.digest(openssl::hash::MessageDigest::sha256())?;
-            let fingerprint = fingerprint
-                .iter()
-                .map(|b| format!("{b:02X}"))
-                .collect::<Vec<_>>()
-                .join(":");
+        let fingerprint = crate::tls::pin::Fingerprint::for_der(&cert.to_der()?);
+        let store = crate::trust_store::Store::discover()?;
+        if let Some(saved) = store.get(host, port)? {
+            if saved != fingerprint {
+                return Err(bad(format!(
+                    "VNC certificate for {host}:{port} differs from the remembered fingerprint"
+                )));
+            }
+            eprintln!("VNC: remembered certificate verified for {host}:{port}.");
+        } else if deferred.load(Ordering::Relaxed) {
             eprintln!(
                 "VNC certificate cannot be verified for {host}.\nSHA-256: {fingerprint}\nValid from: {}\nValid until: {}",
                 cert.not_before(),
@@ -184,7 +187,7 @@ async fn vencrypt(mut stream: Stream, host: &str, user: Option<&str>) -> Result<
             if !io::stdin().is_terminal() {
                 return Err(bad("Certificate approval requires an interactive terminal"));
             }
-            eprint!("Trust this certificate for this connection? [y/N] ");
+            eprint!("Trust and remember this certificate for {host}:{port}? [y/N] ");
             io::stderr().flush()?;
             let mut answer = String::new();
             io::stdin().read_line(&mut answer)?;
@@ -193,7 +196,8 @@ async fn vencrypt(mut stream: Stream, host: &str, user: Option<&str>) -> Result<
             }
             // Approval is bound to this already-established TLS connection's
             // certificate; no second connection can substitute another key.
-            eprintln!("VNC: encrypted TLS with this certificate approved for this session.");
+            store.remember(host, port, fingerprint)?;
+            eprintln!("VNC: certificate trusted and remembered for {host}:{port}.");
         } else {
             eprintln!("VNC: certificate-verified TLS (VeNCrypt X509).");
         }
@@ -237,7 +241,7 @@ pub async fn connect(host: &str, port: u16, user: Option<&str>) -> Result<VncCli
     match selected {
         0 => return Err(bad(reason(&mut stream).await?)),
         19 => {
-            stream = vencrypt(stream, host, user).await?;
+            stream = vencrypt(stream, host, port, user).await?;
             security_result(&mut stream, version).await?;
         }
         2 => {
