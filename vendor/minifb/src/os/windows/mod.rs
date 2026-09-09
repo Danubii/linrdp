@@ -703,6 +703,10 @@ impl Window {
         false
     }
 
+    pub fn keyboard_shortcuts_inhibited(&self) -> Option<bool> {
+        None
+    }
+
     #[inline]
     pub fn set_icon(&mut self, icon: Icon) {
         unsafe {

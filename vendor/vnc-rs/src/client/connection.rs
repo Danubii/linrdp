@@ -194,7 +194,12 @@ impl VncInner {
                     0, // non-incremental: server sends entire framebuffer
                 ),
                 X11Event::SetDesktopSize(screen) => {
-                    ClientMsg::SetDesktopSize(screen.id, screen.width, screen.height)
+                    ClientMsg::SetDesktopSize(
+                        screen.id,
+                        screen.width,
+                        screen.height,
+                        screen.flags,
+                    )
                 }
                 X11Event::KeyEvent(key) => ClientMsg::KeyEvent(key.keycode, key.down),
                 X11Event::PointerEvent(mouse) => {
@@ -475,23 +480,25 @@ where
                             let screens = stream.read_u8().await? as usize;
                             let mut padding = [0u8; 3];
                             stream.read_exact(&mut padding).await?;
-                            let mut screen_id = None;
+                            let mut primary_screen = None;
                             for index in 0..screens {
                                 let mut screen = [0u8; 16];
                                 stream.read_exact(&mut screen).await?;
                                 if index == 0 {
-                                    screen_id = Some(u32::from_be_bytes(
-                                        screen[..4].try_into().unwrap(),
+                                    primary_screen = Some((
+                                        u32::from_be_bytes(screen[..4].try_into().unwrap()),
+                                        u32::from_be_bytes(screen[12..16].try_into().unwrap()),
                                     ));
                                 }
                             }
                             if rect.rect.y == 0 {
-                                if let Some(id) = screen_id {
+                                if let Some((id, flags)) = primary_screen {
                                     output_func(VncEvent::DesktopResizeAvailable(
                                         crate::DesktopScreen {
                                             id,
                                             width: rect.rect.width,
                                             height: rect.rect.height,
+                                            flags,
                                         },
                                     ))
                                     .await?;

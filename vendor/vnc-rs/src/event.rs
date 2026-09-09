@@ -24,6 +24,7 @@ pub struct DesktopScreen {
     pub id: u32,
     pub width: u16,
     pub height: u16,
+    pub flags: u32,
 }
 
 impl From<(u16, u16)> for Screen {

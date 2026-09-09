@@ -396,12 +396,16 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
         let mut rendered_size = (0, 0);
         let mut changed = true;
         let mut resize_supported = false;
-        let mut resize_screen_id = None;
+        let mut resize_screen = None;
         let mut resize_pending =
             (window.get_size() != (canvas.width, canvas.height)).then(Instant::now);
         let mut requested_size = None;
         let mut observed_window_size = window.get_size();
         let mut scroll_accumulator = 0.0;
+        let mut capture_latched = false;
+        let mut release_latched = false;
+        let mut capture_requested = false;
+        let mut capture_active = false;
         while window.is_open() {
             for _ in 0..64 {
                 match runtime.block_on(client.poll_event())? {
@@ -412,7 +416,7 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                                     eprintln!("VNC: server supports dynamic desktop resizing.");
                                 }
                                 resize_supported = true;
-                                resize_screen_id = Some(screen.id);
+                                resize_screen = Some((screen.id, screen.flags));
                                 if window.get_size() != (canvas.width, canvas.height) {
                                     resize_pending.get_or_insert_with(Instant::now);
                                 }
@@ -432,7 +436,7 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                 observed_window_size = size;
                 resize_pending = Some(Instant::now());
             }
-            if let Some(screen_id) = resize_screen_id
+            if let Some((screen_id, screen_flags)) = resize_screen
                 && resize_pending.is_some_and(|since| since.elapsed() >= Duration::from_millis(250))
                 && valid_resize_request(size, (canvas.width, canvas.height), requested_size)
             {
@@ -440,6 +444,7 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                     id: screen_id,
                     width: size.0 as u16,
                     height: size.1 as u16,
+                    flags: screen_flags,
                 })))?;
                 eprintln!("VNC: requested desktop size {}x{}.", size.0, size.1);
                 requested_size = Some(size);
@@ -453,6 +458,20 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                 window.update();
             }
             let focused = window.is_active();
+            let ctrl = window.is_key_down(Key::LeftCtrl) || window.is_key_down(Key::RightCtrl);
+            let alt = window.is_key_down(Key::LeftAlt) || window.is_key_down(Key::RightAlt);
+            let shift = window.is_key_down(Key::LeftShift) || window.is_key_down(Key::RightShift);
+            let capture_down = focused && ctrl && alt && shift && window.is_key_down(Key::Enter);
+            let release_down = focused && ctrl && alt && shift && window.is_key_down(Key::Escape);
+            let polled_grab_change = if capture_down && !capture_latched {
+                Some(true)
+            } else if release_down && !release_latched {
+                Some(false)
+            } else {
+                None
+            };
+            capture_latched = capture_down;
+            release_latched = release_down;
             if active && !focused {
                 keyboard
                     .lock()
@@ -478,16 +497,37 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                 let grab_change = keys.take_grab_change();
                 (events, grab_change)
             };
-            if let Some(grabbed) = grab_change {
+            if let Some(grabbed) = grab_change.or(polled_grab_change) {
                 if window.set_keyboard_shortcuts_inhibited(grabbed) {
+                    capture_requested = grabbed;
+                    eprintln!(
+                        "VNC: keyboard capture {}.",
+                        if grabbed { "requested" } else { "released" }
+                    );
                     window.set_title(if grabbed {
-                        "LinRDP — VNC — keyboard captured; Ctrl+Alt+Shift+Esc releases"
+                        "LinRDP — VNC — requesting keyboard capture…"
                     } else {
                         "LinRDP — VNC — Ctrl+Alt+Shift+Enter captures keyboard"
                     });
                 } else {
                     window.set_title("LinRDP — VNC — keyboard capture unavailable");
                 }
+            }
+            if let Some(inhibited) = window.keyboard_shortcuts_inhibited()
+                && inhibited != capture_active
+            {
+                capture_active = inhibited;
+                eprintln!(
+                    "VNC: keyboard capture {} by compositor.",
+                    if inhibited { "activated" } else { "deactivated" }
+                );
+                window.set_title(if inhibited {
+                    "LinRDP — VNC — keyboard captured; Ctrl+Alt+Shift+Esc releases"
+                } else if capture_requested {
+                    "LinRDP — VNC — waiting for keyboard capture…"
+                } else {
+                    "LinRDP — VNC — Ctrl+Alt+Shift+Enter captures keyboard"
+                });
             }
             for event in events {
                 if focused || matches!(&event,X11Event::KeyEvent(key) if !key.down) {

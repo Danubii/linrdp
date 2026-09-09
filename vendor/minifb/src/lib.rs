@@ -378,6 +378,12 @@ impl Window {
         self.0.set_keyboard_shortcuts_inhibited(inhibited)
     }
 
+    /// Reports whether the Wayland compositor has activated shortcut inhibition.
+    /// Returns `None` when the active backend does not support shortcut inhibition.
+    pub fn keyboard_shortcuts_inhibited(&self) -> Option<bool> {
+        self.0.keyboard_shortcuts_inhibited()
+    }
+
     /// Sets the icon of the window after creation.
     ///
     /// The file path has to be relative to the current working directory.

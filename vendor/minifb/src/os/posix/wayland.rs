@@ -40,7 +40,9 @@ use wayland_protocols::{
     unstable::{
         keyboard_shortcuts_inhibit::v1::client::{
             zwp_keyboard_shortcuts_inhibit_manager_v1::ZwpKeyboardShortcutsInhibitManagerV1,
-            zwp_keyboard_shortcuts_inhibitor_v1::ZwpKeyboardShortcutsInhibitorV1,
+            zwp_keyboard_shortcuts_inhibitor_v1::{
+                Event as ShortcutInhibitorEvent, ZwpKeyboardShortcutsInhibitorV1,
+            },
         },
         xdg_decoration::v1::client::zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
     },
@@ -193,6 +195,7 @@ struct DisplayInfo {
     redraw_pending: bool,
     shortcut_manager: Option<Main<ZwpKeyboardShortcutsInhibitManagerV1>>,
     shortcut_inhibitor: Option<Main<ZwpKeyboardShortcutsInhibitorV1>>,
+    shortcut_inhibitor_active: Rc<RefCell<bool>>,
     seat: Main<WlSeat>,
 }
 
@@ -340,6 +343,7 @@ impl DisplayInfo {
                 redraw_pending: false,
                 shortcut_manager,
                 shortcut_inhibitor: None,
+                shortcut_inhibitor_active: Rc::new(RefCell::new(false)),
                 seat,
             },
             input_devices,
@@ -363,7 +367,12 @@ impl DisplayInfo {
                 return false;
             };
             let inhibitor = manager.inhibit_shortcuts(&self.surface, &self.seat);
-            inhibitor.quick_assign(|_, _, _| {});
+            let active = self.shortcut_inhibitor_active.clone();
+            inhibitor.quick_assign(move |_, event, _| match event {
+                ShortcutInhibitorEvent::Active => *active.borrow_mut() = true,
+                ShortcutInhibitorEvent::Inactive => *active.borrow_mut() = false,
+                _ => {}
+            });
             self.shortcut_inhibitor = Some(inhibitor);
             self.surface.commit();
         } else if !inhibited {
@@ -371,8 +380,15 @@ impl DisplayInfo {
                 inhibitor.destroy();
                 self.surface.commit();
             }
+            *self.shortcut_inhibitor_active.borrow_mut() = false;
         }
         true
+    }
+
+    fn keyboard_shortcuts_inhibited(&self) -> Option<bool> {
+        self.shortcut_manager
+            .as_ref()
+            .map(|_| *self.shortcut_inhibitor_active.borrow())
     }
 
     #[inline]
@@ -639,6 +655,10 @@ impl Window {
 
     pub fn set_keyboard_shortcuts_inhibited(&mut self, inhibited: bool) -> bool {
         self.display.set_keyboard_shortcuts_inhibited(inhibited)
+    }
+
+    pub fn keyboard_shortcuts_inhibited(&self) -> Option<bool> {
+        self.display.keyboard_shortcuts_inhibited()
     }
 
     #[inline]

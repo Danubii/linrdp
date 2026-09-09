@@ -221,6 +221,10 @@ impl Window {
         false
     }
 
+    pub fn keyboard_shortcuts_inhibited(&self) -> Option<bool> {
+        None
+    }
+
     #[inline]
     pub fn set_rate(&mut self, _rate: Option<Duration>) {}
 
