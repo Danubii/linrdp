@@ -8,6 +8,7 @@ mod tls;
 mod trust_store;
 mod tui;
 mod viewer;
+mod vnc;
 
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -90,7 +91,7 @@ fn run_tui_connection(args: Vec<String>) -> Result<Result<(), String>, Box<dyn s
         Ok(options) => options,
         Err(error) => return Ok(Err(format!("Check connection details: {error}"))),
     };
-    if options.ca_file.is_some() || options.fingerprint.is_some() {
+    if options.vnc || options.ca_file.is_some() || options.fingerprint.is_some() {
         return Ok(run(args).map_err(|error| format!("Connection ended: {error}")));
     }
     let store = match trust_store::Store::discover() {
@@ -255,6 +256,9 @@ fn run_with_tls_hook(
         return Ok(());
     }
     let options = Options::parse(&args)?;
+    if options.vnc {
+        return vnc::run(&options.host, options.port);
+    }
     let host = &options.host;
     let port = options.port;
     // Validate the trust source and server name before any network access.
@@ -361,6 +365,7 @@ fn run_with_tls_hook(
 
 #[derive(Debug, PartialEq, Eq)]
 struct Options {
+    vnc: bool,
     tls: bool,
     nla: bool,
     session: bool,
@@ -381,12 +386,13 @@ impl Options {
         if args.len() < 2
             || !matches!(
                 args[0].as_str(),
-                "probe" | "tls" | "nla-probe" | "login" | "session-probe" | "connect"
+                "probe" | "tls" | "nla-probe" | "login" | "session-probe" | "connect" | "vnc"
             )
         {
             return Err(format!("invalid arguments\n\n{HELP}").into());
         }
         let mut options = Self {
+            vnc: args[0] == "vnc",
             tls: args[0] != "probe",
             nla: matches!(
                 args[0].as_str(),
@@ -400,7 +406,7 @@ impl Options {
             h264: false,
             user: None,
             host: args[1].clone(),
-            port: 3389,
+            port: if args[0] == "vnc" { 5900 } else { 3389 },
             ca_file: None,
             fingerprint: None,
         };
@@ -414,6 +420,15 @@ impl Options {
         }
         if options.port == 0 {
             return Err("port must be between 1 and 65535".into());
+        }
+        if options.vnc {
+            if !rest.is_empty() {
+                return Err(
+                    "VNC accepts a host and optional port; authentication is prompted locally"
+                        .into(),
+                );
+            }
+            return Ok(options);
         }
         let mut clipboard_set = false;
         let mut dynamic_set = false;
@@ -601,6 +616,7 @@ mod tests {
         assert_eq!(
             Options::parse(&args).unwrap(),
             Options {
+                vnc: false,
                 tls: true,
                 nla: false,
                 session: false,
@@ -835,5 +851,27 @@ mod tests {
         ] {
             assert!(Options::parse(&args.map(str::to_owned)).is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod vnc_option_tests {
+    use super::*;
+    #[test]
+    fn vnc_is_explicit_and_rejects_rdp_options() {
+        let parse =
+            |args: &[&str]| Options::parse(&args.iter().map(|a| (*a).into()).collect::<Vec<_>>());
+        let options = parse(&["vnc", "localhost"]).unwrap();
+        assert!(options.vnc);
+        assert_eq!(options.port, 5900);
+        assert_eq!(parse(&["vnc", "::1", "5901"]).unwrap().port, 5901);
+        assert!(parse(&["vnc", "localhost", "0"]).is_err());
+        assert!(parse(&["vnc", "localhost", "--user", "tester"]).is_err());
+        assert!(parse(&["vnc", "localhost", "--cert-sha256", "00"]).is_err());
+        assert!(
+            !parse(&["connect", "localhost", "--user", "tester"])
+                .unwrap()
+                .vnc
+        );
     }
 }

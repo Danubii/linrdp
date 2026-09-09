@@ -155,3 +155,5 @@ before client information, licensing or desktop activation; it does not display
 a desktop. This path has passed against the Windows test host.
 
 See [session behavior](docs/sessions.md) and [MCS/GCC scope](docs/mcs.md).
+
+Experimental [VNC connections](docs/vnc.md) are also available through `linrdp vnc` or the RDP/VNC selector in the TUI.

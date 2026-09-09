@@ -234,6 +234,7 @@ enum Focus {
     Size,
     Dynamic,
     Graphics,
+    Protocol,
     Clipboard,
     Trust,
     TrustValue,
@@ -271,6 +272,7 @@ struct Form {
     size: String,
     dynamic: bool,
     h264: bool,
+    vnc: bool,
     clipboard: bool,
     trust: Trust,
     trust_value: String,
@@ -286,6 +288,7 @@ impl Default for Form {
             size: "1024x768".into(),
             dynamic: true,
             h264: false,
+            vnc: false,
             clipboard: true,
             trust: Trust::System,
             trust_value: String::new(),
@@ -310,6 +313,7 @@ impl Form {
             size: profile.size.clone().unwrap_or_else(|| "1024x768".into()),
             dynamic: profile.dynamic_resolution,
             h264: profile.h264,
+            vnc: profile.vnc,
             clipboard: profile.clipboard,
             trust,
             trust_value,
@@ -327,6 +331,7 @@ impl Form {
             size: (!self.size.trim().is_empty()).then(|| self.size.trim().into()),
             dynamic_resolution: self.dynamic,
             h264: self.h264,
+            vnc: self.vnc,
             clipboard: self.clipboard,
             ca: (self.trust == Trust::Ca).then(|| self.trust_value.trim().into()),
             fingerprint: (self.trust == Trust::SavedPin)
@@ -391,6 +396,7 @@ impl App {
                     .map_or_else(|| "1024x768".into(), |(w, h)| format!("{w}x{h}")),
                 dynamic: options.dynamic_resolution,
                 h264: options.h264,
+                vnc: options.vnc,
                 clipboard: options.clipboard,
                 trust: if options.ca_file.is_some() {
                     Trust::Ca
@@ -412,6 +418,7 @@ impl App {
         const BASIC: &[Focus] = &[
             Focus::Saved,
             Focus::Computer,
+            Focus::Protocol,
             Focus::User,
             Focus::Connect,
             Focus::Options,
@@ -423,6 +430,7 @@ impl App {
         const ADVANCED: &[Focus] = &[
             Focus::Saved,
             Focus::Computer,
+            Focus::Protocol,
             Focus::User,
             Focus::Connect,
             Focus::Options,
@@ -438,7 +446,29 @@ impl App {
             Focus::Trust,
             Focus::TrustValue,
         ];
-        if self.advanced { ADVANCED } else { BASIC }
+        const VNC: &[Focus] = &[
+            Focus::Saved,
+            Focus::Computer,
+            Focus::Protocol,
+            Focus::Connect,
+            Focus::Options,
+            Focus::Save,
+            Focus::SaveAs,
+            Focus::Edit,
+            Focus::Delete,
+            Focus::Port,
+        ];
+        if self.form.vnc {
+            if self.advanced {
+                VNC
+            } else {
+                &VNC[..VNC.len() - 1]
+            }
+        } else if self.advanced {
+            ADVANCED
+        } else {
+            BASIC
+        }
     }
 
     fn move_focus(&mut self, backwards: bool) {
@@ -577,6 +607,16 @@ impl App {
                 self.form.dynamic = !self.form.dynamic;
                 Command::None
             }
+            Focus::Protocol => {
+                self.form.vnc = !self.form.vnc;
+                if self.form.port == "3389" && self.form.vnc {
+                    self.form.port = "5900".into();
+                } else if self.form.port == "5900" && !self.form.vnc {
+                    self.form.port = "3389".into();
+                }
+                self.status = if self.form.vnc { "VNC: password authentication; local scaling. RDP graphics/trust/clipboard options do not apply." } else { "RDP connection selected." }.into();
+                Command::None
+            }
             Focus::Graphics => {
                 self.form.h264 = !self.form.h264;
                 Command::None
@@ -709,6 +749,13 @@ impl App {
             }
         }
         line(out, 29, 4, "Connection", true)?;
+        button(
+            out,
+            58,
+            4,
+            if self.form.vnc { "VNC" } else { "RDP" },
+            self.focus == Focus::Protocol,
+        )?;
         labeled(
             out,
             29,
@@ -721,7 +768,11 @@ impl App {
             out,
             29,
             8,
-            "User",
+            if self.form.vnc {
+                "User (not used)"
+            } else {
+                "User"
+            },
             &self.form.user,
             self.focus == Focus::User,
         )?;
@@ -760,55 +811,66 @@ impl App {
                 &self.form.port,
                 self.focus == Focus::Port,
             )?;
-            labeled(
-                out,
-                29,
-                16,
-                "Initial size",
-                &self.form.size,
-                self.focus == Focus::Size,
-            )?;
-            choice(
-                out,
-                29,
-                18,
-                "Dynamic resolution",
-                self.form.dynamic,
-                self.focus == Focus::Dynamic,
-            )?;
-            choice(
-                out,
-                58,
-                18,
-                "Clipboard",
-                self.form.clipboard,
-                self.focus == Focus::Clipboard,
-            )?;
-            labeled(
-                out,
-                29,
-                20,
-                "Trust",
-                self.form.trust.label(),
-                self.focus == Focus::Trust,
-            )?;
-            choice(
-                out,
-                58,
-                20,
-                "H.264",
-                self.form.h264,
-                self.focus == Focus::Graphics,
-            )?;
-            if self.form.trust == Trust::Ca {
+            if !self.form.vnc {
                 labeled(
                     out,
                     29,
-                    21,
-                    "CA file",
-                    &self.form.trust_value,
-                    self.focus == Focus::TrustValue,
+                    16,
+                    "Initial size",
+                    &self.form.size,
+                    self.focus == Focus::Size,
                 )?;
+                choice(
+                    out,
+                    29,
+                    18,
+                    "Dynamic resolution",
+                    self.form.dynamic,
+                    self.focus == Focus::Dynamic,
+                )?;
+                choice(
+                    out,
+                    58,
+                    18,
+                    "Clipboard",
+                    self.form.clipboard,
+                    self.focus == Focus::Clipboard,
+                )?;
+                labeled(
+                    out,
+                    29,
+                    20,
+                    "Trust",
+                    self.form.trust.label(),
+                    self.focus == Focus::Trust,
+                )?;
+                choice(
+                    out,
+                    58,
+                    20,
+                    "H.264",
+                    self.form.h264,
+                    self.focus == Focus::Graphics,
+                )?;
+                if self.form.trust == Trust::Ca {
+                    labeled(
+                        out,
+                        29,
+                        21,
+                        "CA file",
+                        &self.form.trust_value,
+                        self.focus == Focus::TrustValue,
+                    )?;
+                }
+            } else {
+                line(
+                    out,
+                    29,
+                    16,
+                    "Server resolution; local window scaling",
+                    false,
+                )?;
+                line(out, 29, 18, "VNC password is prompted when required", false)?;
             }
         }
         let status_y = height.saturating_sub(2);
@@ -970,6 +1032,37 @@ mod tests {
         app.form.user = "tester".into();
     }
 
+    #[test]
+    fn protocol_toggle_switches_default_ports_and_keeps_custom_ports() {
+        let mut app = App::new(Vec::new(), None, None);
+        app.focus = Focus::Protocol;
+        app.key(key(KeyCode::Enter));
+        assert!(app.form.vnc);
+        assert_eq!(app.form.port, "5900");
+        app.key(key(KeyCode::Enter));
+        assert!(!app.form.vnc);
+        assert_eq!(app.form.port, "3389");
+        app.form.port = "5999".into();
+        app.key(key(KeyCode::Enter));
+        assert_eq!(app.form.port, "5999");
+    }
+    #[test]
+    fn vnc_profiles_round_trip_without_user_or_rdp_flags() {
+        let mut app = App::new(Vec::new(), None, None);
+        app.form.computer = "vnc.example".into();
+        app.form.vnc = true;
+        app.form.port = "5901".into();
+        let profile = app.form.profile("VNC desktop".into()).unwrap();
+        assert_eq!(profile.arguments(), vec!["vnc", "vnc.example", "5901"]);
+        let json = serde_json::to_string(&profile).unwrap();
+        let saved: Profile = serde_json::from_str(&json).unwrap();
+        assert!(Form::from_profile(&saved).vnc);
+        let args = saved.arguments();
+        let resumed = App::new(Vec::new(), None, Some(&args));
+        assert!(resumed.form.vnc);
+        assert_eq!(resumed.form.port, "5901");
+        assert!(!resumed.focuses().contains(&Focus::User));
+    }
     #[test]
     fn graphics_choice_survives_profile_and_connection_resume() {
         let mut app = App::new(Vec::new(), None, None);

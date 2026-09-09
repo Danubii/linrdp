@@ -24,6 +24,8 @@ pub struct Profile {
     pub dynamic_resolution: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub h264: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub vnc: bool,
     pub clipboard: bool,
     pub ca: Option<String>,
     pub fingerprint: Option<String>,
@@ -35,6 +37,9 @@ fn is_false(value: &bool) -> bool {
 
 impl Profile {
     pub fn arguments(&self) -> Vec<String> {
+        if self.vnc {
+            return vec!["vnc".into(), self.computer.clone(), self.port.to_string()];
+        }
         let mut args = vec!["connect".into(), self.computer.clone()];
         if self.port != 3389 {
             args.push(self.port.to_string());
@@ -64,7 +69,7 @@ impl Profile {
         for (label, value, allow_empty) in [
             ("profile name", self.name.as_str(), false),
             ("computer", self.computer.as_str(), false),
-            ("user", self.user.as_str(), false),
+            ("user", self.user.as_str(), self.vnc),
             ("size", self.size.as_deref().unwrap_or(""), true),
             ("CA path", self.ca.as_deref().unwrap_or(""), true),
             (
@@ -185,6 +190,7 @@ mod tests {
             size: Some("1280x800".into()),
             dynamic_resolution: true,
             h264: false,
+            vnc: false,
             clipboard: false,
             ca: Some("/tmp/lab.pem".into()),
             fingerprint: None,

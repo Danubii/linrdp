@@ -1,7 +1,7 @@
 [workspace]
 members = ["crates/linrdp-proto", "crates/linrdp"]
 resolver = "3"
-exclude = ["vendor/minifb"]
+exclude = ["vendor/minifb", "vendor/vnc-rs"]
 
 [workspace.package]
 version = "0.1.0"
@@ -14,3 +14,4 @@ unsafe_code = "forbid"
 
 [patch.crates-io]
 minifb = { path = "vendor/minifb" }
+vnc-rs = { path = "vendor/vnc-rs" }
