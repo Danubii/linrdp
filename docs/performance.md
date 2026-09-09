@@ -86,3 +86,34 @@ See Microsoft's [graphics capability negotiation specification](https://learn.mi
 The experimental profile implements version 8.1 with software AVC420 decoding.
 Hardware decoding and AVC444 remain future work. See [H.264](h264.md) for the
 supported codecs and limits of current Windows validation.
+
+## Native Wayland submission
+
+The Wayland backend now submits packed window-sized input directly to its shared
+memory writer. Previously it always ran the scalar resizer, even after the viewer
+had already produced the exact window dimensions. This extra full-screen pass
+affected both bitmap and experimental graphics sessions. Inputs with different
+sizes or padded strides retain the existing scaling path.
+
+An isolated optimized build of the previous C scaler took 3.107–3.688 ms per
+1080p frame and 12.463–13.112 ms per 4K frame in three batches of 100 calls after
+other builds completed. The new native-size path eliminates that pass; it still
+copies into compositor storage. These measurements do not establish remote FPS.
+
+A live Wayland regression checks the submitted pixel contents, verifies that the
+intermediate scaling buffer is untouched for native-size input, and verifies the
+padded-stride fallback. The existing compositor-buffer exhaustion and resize test
+also passes. Run both with:
+
+```sh
+cargo test --manifest-path vendor/minifb/Cargo.toml --release native_ -- --ignored --nocapture --test-threads=1
+```
+
+For interactive performance testing, use the optimized binary:
+
+```sh
+cargo run --release -p linrdp -- tui
+```
+
+A plain `cargo run` builds without release optimizations and is unsuitable for
+comparing decoding or animation performance.

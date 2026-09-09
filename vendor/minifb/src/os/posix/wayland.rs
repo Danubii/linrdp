@@ -1253,11 +1253,22 @@ impl Window {
     ) -> Result<()> {
         check_buffer_size(buffer, buf_width, buf_height, buf_stride)?;
 
-        unsafe { self.scale_buffer(buffer, buf_width, buf_height, buf_stride) };
-
-        self.display
-            .update_framebuffer(&self.buffer, (self.width, self.height))
-            .map_err(|e| Error::UpdateFailed(format!("Error updating framebuffer: {:?}", e)))?;
+        // LinRDP already supplies window-sized pixels, including letterboxing.
+        // Submit packed, native-sized input directly instead of resampling and
+        // copying every pixel through an intermediate buffer a second time.
+        let native = buf_width == self.width as usize
+            && buf_height == self.height as usize
+            && buf_stride == buf_width;
+        let result = if native {
+            self.display.update_framebuffer(
+                &buffer[..buf_width * buf_height],
+                (self.width, self.height),
+            )
+        } else {
+            unsafe { self.scale_buffer(buffer, buf_width, buf_height, buf_stride) };
+            self.display.update_framebuffer(&self.buffer, (self.width, self.height))
+        };
+        result.map_err(|e| Error::UpdateFailed(format!("Error updating framebuffer: {:?}", e)))?;
         self.update();
 
         Ok(())
@@ -1388,6 +1399,29 @@ mod linrdp_buffer_tests {
         assert!(select_buffer(released.iter().copied()).is_err());
         released[2] = true;
         assert_eq!(select_buffer(released.iter().copied()).unwrap(), Some(2));
+    }
+
+    #[test]
+    #[ignore = "opens a small native Wayland window; requires a running compositor"]
+    fn native_sized_submission_bypasses_scaler_and_preserves_pixels() {
+        use std::os::unix::fs::FileExt;
+        let mut window = Window::new("LinRDP native submission test", 64, 64, WindowOptions::default()).unwrap();
+        let pixels: Vec<u32> = (0..64 * 64).map(|i| 0x123400 + i).collect();
+        let scratch = window.buffer.clone();
+        window.update_with_buffer_stride(&pixels, 64, 64, 64).unwrap();
+        assert_eq!(window.buffer, scratch, "native submission invoked the scaler");
+        assert!(window.display.buf_pool.pool.iter().any(|entry| {
+            let mut bytes = vec![0; pixels.len() * 4];
+            entry.fd.read_exact_at(&mut bytes, 0).unwrap();
+            bytes.chunks_exact(4).zip(&pixels).all(|(b, p)| {
+                u32::from_ne_bytes([b[0], b[1], b[2], b[3]]) == *p
+            })
+        }));
+        // Padded rows must still use the stride-aware scaling path.
+        let mut padded = vec![0xdeadbeef; 65 * 64];
+        for row in 0..64 { padded[row * 65..row * 65 + 64].copy_from_slice(&pixels[row * 64..row * 64 + 64]); }
+        window.update_with_buffer_stride(&padded, 64, 64, 65).unwrap();
+        assert_eq!(window.buffer, pixels);
     }
 
     #[test]

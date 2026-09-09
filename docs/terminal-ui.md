@@ -5,6 +5,9 @@ explicitly, to open the terminal connection screen. With redirected input or
 output, no arguments continue to print command-line help. Existing commands such
 as `linrdp connect` remain available for scripts and direct use.
 
+When running from the repository, use `cargo run --release -p linrdp -- tui`
+for desktop sessions so decoding and rendering use compiler optimizations.
+
 The screen follows the familiar Remote Desktop Connection order: Computer,
 User, then Connect. Tab and Shift+Tab move between controls, Enter activates the
 focused control, arrow keys move through saved connections, and Esc exits.
