@@ -8,6 +8,7 @@ pub(super) enum ClientMsg {
     FramebufferUpdateRequest(Rect, u8),
     SetDesktopSize(u32, u16, u16, u32),
     KeyEvent(u32, bool),
+    ExtendedKeyEvent(u32, u32, bool),
     PointerEvent(u16, u16, u8),
     ClientCutText(String),
 }
@@ -98,6 +99,14 @@ impl ClientMsg {
                 // +--------------+--------------+--------------+
                 let mut payload = vec![4, down as u8, 0, 0];
                 payload.write_u32(keycode).await?;
+                writer.write_all(&payload).await?;
+                Ok(())
+            }
+            ClientMsg::ExtendedKeyEvent(keysym, keycode, down) => {
+                let mut payload = vec![255, 0];
+                payload.extend_from_slice(&(down as u16).to_be_bytes());
+                payload.extend_from_slice(&keysym.to_be_bytes());
+                payload.extend_from_slice(&keycode.to_be_bytes());
                 writer.write_all(&payload).await?;
                 Ok(())
             }
@@ -232,5 +241,20 @@ mod tests {
         expected.extend_from_slice(&700u16.to_be_bytes());
         expected.extend_from_slice(&3u32.to_be_bytes());
         assert_eq!(actual.as_slice(), expected);
+    }
+
+    #[tokio::test]
+    async fn qemu_extended_key_event_encodes_hardware_keycode() {
+        let (mut writer, mut reader) = tokio::io::duplex(32);
+        ClientMsg::ExtendedKeyEvent('2' as u32, 3, true)
+            .write(&mut writer)
+            .await
+            .unwrap();
+        let mut actual = [0u8; 12];
+        reader.read_exact(&mut actual).await.unwrap();
+        assert_eq!(
+            actual,
+            [255, 0, 0, 1, 0, 0, 0, b'2', 0, 0, 0, 3]
+        );
     }
 }

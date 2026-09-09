@@ -163,6 +163,7 @@ struct Keyboard {
     overflow: bool,
     pending_text: Option<u32>,
     grab_change: Option<bool>,
+    extended_key_events: bool,
 }
 impl Keyboard {
     fn emit(&mut self, keycode: u32, down: bool) {
@@ -170,6 +171,21 @@ impl Keyboard {
             self.events.push(X11Event::KeyEvent((keycode, down).into()));
         } else {
             self.overflow = true;
+        }
+    }
+    fn emit_key(&mut self, key: Key, keysym: u32, down: bool) {
+        if self.events.len() >= 1024 {
+            self.overflow = true;
+        } else if self.extended_key_events
+            && let Some(keycode) = physical_keycode(key)
+        {
+            self.events.push(X11Event::ExtendedKeyEvent {
+                keysym,
+                keycode,
+                down,
+            });
+        } else {
+            self.events.push(X11Event::KeyEvent((keysym, down).into()));
         }
     }
     fn flush_text(&mut self) {
@@ -211,14 +227,14 @@ impl Keyboard {
                     self.flush_text();
                 }
                 let code = *self.held.entry(key).or_insert(code);
-                self.emit(code, true);
+                self.emit_key(key, code, true);
             } else {
                 self.flush_text();
             }
         } else {
             self.flush_text();
             if let Some(code) = self.held.remove(&key) {
-                self.emit(code, false);
+                self.emit_key(key, code, false);
             }
         }
     }
@@ -255,8 +271,8 @@ impl Keyboard {
     fn release(&mut self) {
         self.pending_text = None;
         let keys = std::mem::take(&mut self.held);
-        for code in keys.into_values() {
-            self.emit(code, false);
+        for (key, code) in keys {
+            self.emit_key(key, code, false);
         }
     }
 }
@@ -273,6 +289,104 @@ impl InputCallback for Callback {
         }
     }
 }
+
+fn physical_keycode(key: Key) -> Option<u32> {
+    use Key::*;
+    Some(match key {
+        Escape => 1,
+        Key1 => 2,
+        Key2 => 3,
+        Key3 => 4,
+        Key4 => 5,
+        Key5 => 6,
+        Key6 => 7,
+        Key7 => 8,
+        Key8 => 9,
+        Key9 => 10,
+        Key0 => 11,
+        Minus => 12,
+        Equal => 13,
+        Backspace => 14,
+        Tab => 15,
+        Q => 16,
+        W => 17,
+        E => 18,
+        R => 19,
+        T => 20,
+        Y => 21,
+        U => 22,
+        I => 23,
+        O => 24,
+        P => 25,
+        LeftBracket => 26,
+        RightBracket => 27,
+        Enter => 28,
+        LeftCtrl => 29,
+        A => 30,
+        S => 31,
+        D => 32,
+        F => 33,
+        G => 34,
+        H => 35,
+        J => 36,
+        K => 37,
+        L => 38,
+        Semicolon => 39,
+        Apostrophe => 40,
+        Backquote => 41,
+        LeftShift => 42,
+        Backslash => 43,
+        Z => 44,
+        X => 45,
+        C => 46,
+        V => 47,
+        B => 48,
+        N => 49,
+        M => 50,
+        Comma => 51,
+        Period => 52,
+        Slash => 53,
+        RightShift => 54,
+        NumPadAsterisk => 55,
+        LeftAlt => 56,
+        Space => 57,
+        CapsLock => 58,
+        F1 => 59,
+        F2 => 60,
+        F3 => 61,
+        F4 => 62,
+        F5 => 63,
+        F6 => 64,
+        F7 => 65,
+        F8 => 66,
+        F9 => 67,
+        F10 => 68,
+        NumLock => 69,
+        ScrollLock => 70,
+        F11 => 87,
+        F12 => 88,
+        NumPadEnter => 0x9c,
+        RightCtrl => 0x9d,
+        NumPadSlash => 0xb5,
+        RightAlt => 0xb8,
+        Pause => 0xc6,
+        Home => 0xc7,
+        Up => 0xc8,
+        PageUp => 0xc9,
+        Left => 0xcb,
+        Right => 0xcd,
+        End => 0xcf,
+        Down => 0xd0,
+        PageDown => 0xd1,
+        Insert => 0xd2,
+        Delete => 0xd3,
+        LeftSuper => 0xdb,
+        RightSuper => 0xdc,
+        Menu => 0xdd,
+        _ => return None,
+    })
+}
+
 fn keysym(k: Key, shift: bool) -> Option<u32> {
     use Key::*;
     let n = k as u32;
@@ -495,6 +609,15 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                 match runtime.block_on(client.poll_event())? {
                     Some(event) => {
                         match &event {
+                            VncEvent::ExtendedKeyEventAvailable => {
+                                let mut keys = keyboard
+                                    .lock()
+                                    .map_err(|_| invalid("VNC keyboard lock failed"))?;
+                                if !keys.extended_key_events {
+                                    eprintln!("VNC: server enabled hardware key events.");
+                                    keys.extended_key_events = true;
+                                }
+                            }
                             VncEvent::DesktopResizeAvailable(screen) => {
                                 if !resize_supported {
                                     eprintln!("VNC: server supports dynamic desktop resizing.");
@@ -800,6 +923,32 @@ mod tests {
                 ('2' as u32, true),
                 ('2' as u32, false)
             ]
+        );
+    }
+    #[test]
+    fn negotiated_extended_keys_include_qemu_hardware_codes() {
+        let mut keyboard = Keyboard {
+            extended_key_events: true,
+            ..Keyboard::default()
+        };
+        keyboard.key(Key::LeftSuper, true);
+        keyboard.key(Key::LeftShift, true);
+        keyboard.key(Key::Key2, true);
+        let actual: Vec<_> = keyboard
+            .drain()
+            .iter()
+            .map(|event| match event {
+                X11Event::ExtendedKeyEvent {
+                    keysym,
+                    keycode,
+                    down,
+                } => (*keysym, *keycode, *down),
+                _ => panic!(),
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            [(0xffeb, 0xdb, true), (0xffe1, 42, true), (50, 3, true)]
         );
     }
     #[test]

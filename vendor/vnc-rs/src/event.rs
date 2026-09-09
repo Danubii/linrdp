@@ -61,6 +61,8 @@ pub enum VncEvent {
     DesktopResizeAvailable(DesktopScreen),
     /// The server rejected a client-requested desktop size.
     DesktopResizeRejected { reason: u16, status: u16 },
+    /// The server accepted QEMU Extended Key Event negotiation.
+    ExtendedKeyEventAvailable,
     /// If the connector doesn't call `set_pixel_format` method
     ///
     /// The engine will generate a [VncEvent::SetPixelFormat] to let the window know how to render image
@@ -156,6 +158,12 @@ pub enum X11Event {
     /// Key down/up
     ///
     KeyEvent(ClientKeyEvent),
+    /// Key down/up with an XT/QEMU hardware keycode.
+    ExtendedKeyEvent {
+        keysym: u32,
+        keycode: u32,
+        down: bool,
+    },
     /// Mouse move/up/down/scroll
     ///
     PointerEvent(ClientMouseEvent),

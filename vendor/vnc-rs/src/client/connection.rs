@@ -202,6 +202,11 @@ impl VncInner {
                     )
                 }
                 X11Event::KeyEvent(key) => ClientMsg::KeyEvent(key.keycode, key.down),
+                X11Event::ExtendedKeyEvent {
+                    keysym,
+                    keycode,
+                    down,
+                } => ClientMsg::ExtendedKeyEvent(keysym, keycode, down),
                 X11Event::PointerEvent(mouse) => {
                     ClientMsg::PointerEvent(mouse.position_x, mouse.position_y, mouse.bottons)
                 }
@@ -469,6 +474,9 @@ where
                         }
                         VncEncoding::CursorPseudo => {
                             cursor.decode(pf, &rect.rect, stream, output_func).await?;
+                        }
+                        VncEncoding::QemuExtendedKeyEventPseudo => {
+                            output_func(VncEvent::ExtendedKeyEventAvailable).await?;
                         }
                         VncEncoding::DesktopSizePseudo => {
                             output_func(VncEvent::SetResolution(
