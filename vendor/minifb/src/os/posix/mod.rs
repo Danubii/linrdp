@@ -74,6 +74,15 @@ impl Window {
         }
     }
 
+    pub fn set_keyboard_shortcuts_inhibited(&mut self, inhibited: bool) -> bool {
+        match self {
+            #[cfg(feature = "x11")]
+            Window::X11(_) => false,
+            #[cfg(feature = "wayland")]
+            Window::Wayland(window) => window.set_keyboard_shortcuts_inhibited(inhibited),
+        }
+    }
+
     pub fn set_icon(&mut self, icon: Icon) {
         match self {
             #[cfg(feature = "x11")]

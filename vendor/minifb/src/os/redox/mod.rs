@@ -94,6 +94,10 @@ impl Window {
         self.window.set_title(title)
     }
 
+    pub fn set_keyboard_shortcuts_inhibited(&mut self, _inhibited: bool) -> bool {
+        false
+    }
+
     #[inline]
     pub fn set_icon(&mut self, _icon: Icon) {
         unimplemented!("Currenty not implemented on RedoxOS")

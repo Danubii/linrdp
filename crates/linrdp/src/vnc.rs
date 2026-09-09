@@ -1,5 +1,5 @@
 //! Plain RFB desktop frontend. Protocol decoding is provided by vnc-rs.
-use minifb::{InputCallback, Key, MouseButton, MouseMode, Window, WindowOptions};
+use minifb::{InputCallback, Key, MouseButton, MouseMode, ScaleMode, Window, WindowOptions};
 use std::{
     collections::BTreeMap,
     error::Error,
@@ -41,6 +41,7 @@ impl Canvas {
     fn event(&mut self, event: VncEvent) -> Result<bool> {
         match event {
             VncEvent::SetResolution(s) => self.resize(s.width.into(), s.height.into())?,
+            VncEvent::DesktopResizeAvailable(s) => self.resize(s.width.into(), s.height.into())?,
             VncEvent::RawImage(r, data) => {
                 self.check(r)?;
                 if data.len() != usize::from(r.width) * usize::from(r.height) * 4 {
@@ -85,6 +86,7 @@ struct Keyboard {
     events: Vec<X11Event>,
     overflow: bool,
     pending_text: Option<u32>,
+    grab_change: Option<bool>,
 }
 impl Keyboard {
     fn emit(&mut self, keycode: u32, down: bool) {
@@ -103,9 +105,19 @@ impl Keyboard {
         }
     }
     fn key(&mut self, key: Key, down: bool) {
+        let ctrl =
+            self.held.contains_key(&Key::LeftCtrl) || self.held.contains_key(&Key::RightCtrl);
+        let alt = self.held.contains_key(&Key::LeftAlt) || self.held.contains_key(&Key::RightAlt);
+        let shift =
+            self.held.contains_key(&Key::LeftShift) || self.held.contains_key(&Key::RightShift);
+        if down && ctrl && alt && shift && matches!(key, Key::Enter | Key::Escape) {
+            self.events.clear();
+            self.pending_text = None;
+            self.held.clear();
+            self.grab_change = Some(key == Key::Enter);
+            return;
+        }
         if down {
-            let shift =
-                self.held.contains_key(&Key::LeftShift) || self.held.contains_key(&Key::RightShift);
             if let Some(mut code) = keysym(key, shift) {
                 if code < 0xff00 {
                     if let Some(text) = self.pending_text.take() {
@@ -152,6 +164,9 @@ impl Keyboard {
     fn drain(&mut self) -> Vec<X11Event> {
         self.flush_text();
         std::mem::take(&mut self.events)
+    }
+    fn take_grab_change(&mut self) -> Option<bool> {
+        self.grab_change.take()
     }
     fn release(&mut self) {
         self.pending_text = None;
@@ -308,11 +323,43 @@ fn keysym(k: Key, shift: bool) -> Option<u32> {
         _ => return None,
     })
 }
+fn viewport(size: (usize, usize), canvas: &Canvas) -> (usize, usize, usize, usize) {
+    let (ww, wh) = (size.0.max(1), size.1.max(1));
+    if ww * canvas.height <= wh * canvas.width {
+        let height = (ww * canvas.height / canvas.width).max(1);
+        (0, (wh - height) / 2, ww, height)
+    } else {
+        let width = (wh * canvas.width / canvas.height).max(1);
+        ((ww - width) / 2, 0, width, wh)
+    }
+}
 fn pointer(x: f32, y: f32, size: (usize, usize), canvas: &Canvas) -> (u16, u16) {
+    let (left, top, width, height) = viewport(size, canvas);
     (
-        ((x.max(0.0) as usize * canvas.width / size.0.max(1)).min(canvas.width - 1)) as u16,
-        ((y.max(0.0) as usize * canvas.height / size.1.max(1)).min(canvas.height - 1)) as u16,
+        (((x.max(0.0) as usize).saturating_sub(left) * canvas.width / width).min(canvas.width - 1))
+            as u16,
+        (((y.max(0.0) as usize).saturating_sub(top) * canvas.height / height)
+            .min(canvas.height - 1)) as u16,
     )
+}
+fn scroll_steps(accumulator: &mut f32, delta: f32) -> i8 {
+    *accumulator = (*accumulator + delta * 0.25).clamp(-8.0, 8.0);
+    let steps = accumulator.trunc().clamp(-2.0, 2.0) as i8;
+    *accumulator -= f32::from(steps);
+    steps
+}
+fn valid_resize_request(
+    size: (usize, usize),
+    framebuffer: (usize, usize),
+    requested: Option<(usize, usize)>,
+) -> bool {
+    requested != Some(size)
+        && size != framebuffer
+        && size.0 > 0
+        && size.1 > 0
+        && size.0 <= 8192
+        && size.1 <= 8192
+        && size.0.saturating_mul(size.1) <= MAX_PIXELS
 }
 fn button(b: MouseButton) -> u8 {
     match b {
@@ -344,28 +391,70 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
             canvas.height,
             WindowOptions {
                 resize: true,
+                scale_mode: ScaleMode::AspectRatioStretch,
                 ..WindowOptions::default()
             },
         )?;
         window.set_target_fps(120);
         let keyboard = Arc::new(Mutex::new(Keyboard::default()));
         window.set_input_callback(Box::new(Callback(keyboard.clone())));
+        window.set_title("LinRDP — VNC — Ctrl+Alt+Shift+Enter captures keyboard");
         let mut mask = 0u8;
         let mut position = (0, 0);
         let mut last_refresh = Instant::now();
         let mut active = true;
         let mut rendered_size = (0, 0);
         let mut changed = true;
+        let mut resize_supported = false;
+        let mut resize_screen_id = None;
+        let mut resize_pending =
+            (window.get_size() != (canvas.width, canvas.height)).then(Instant::now);
+        let mut requested_size = None;
+        let mut observed_window_size = window.get_size();
+        let mut scroll_accumulator = 0.0;
         while window.is_open() {
             for _ in 0..64 {
                 match runtime.block_on(client.poll_event())? {
                     Some(event) => {
+                        match &event {
+                            VncEvent::DesktopResizeAvailable(screen) => {
+                                if !resize_supported {
+                                    eprintln!("VNC: server supports dynamic desktop resizing.");
+                                }
+                                resize_supported = true;
+                                resize_screen_id = Some(screen.id);
+                                if window.get_size() != (canvas.width, canvas.height) {
+                                    resize_pending.get_or_insert_with(Instant::now);
+                                }
+                            }
+                            VncEvent::DesktopResizeRejected { reason, status } => eprintln!(
+                                "VNC: server rejected desktop resize (reason {reason}, status {status})."
+                            ),
+                            _ => {}
+                        }
                         changed |= canvas.event(event)?;
                     }
                     None => break,
                 }
             }
             let size = window.get_size();
+            if size != observed_window_size {
+                observed_window_size = size;
+                resize_pending = Some(Instant::now());
+            }
+            if let Some(screen_id) = resize_screen_id
+                && resize_pending.is_some_and(|since| since.elapsed() >= Duration::from_millis(250))
+                && valid_resize_request(size, (canvas.width, canvas.height), requested_size)
+            {
+                runtime.block_on(client.input(X11Event::SetDesktopSize(vnc::DesktopScreen {
+                    id: screen_id,
+                    width: size.0 as u16,
+                    height: size.1 as u16,
+                })))?;
+                eprintln!("VNC: requested desktop size {}x{}.", size.0, size.1);
+                requested_size = Some(size);
+                resize_pending = None;
+            }
             if changed || rendered_size != size || window.needs_redraw() {
                 window.update_with_buffer(&canvas.pixels, canvas.width, canvas.height)?;
                 rendered_size = size;
@@ -385,7 +474,7 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                 )?;
             }
             active = focused;
-            let events = {
+            let (events, grab_change) = {
                 let mut keys = keyboard
                     .lock()
                     .map_err(|_| invalid("VNC keyboard lock failed"))?;
@@ -395,8 +484,21 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                 if !focused {
                     keys.release();
                 }
-                keys.drain()
+                let events = keys.drain();
+                let grab_change = keys.take_grab_change();
+                (events, grab_change)
             };
+            if let Some(grabbed) = grab_change {
+                if window.set_keyboard_shortcuts_inhibited(grabbed) {
+                    window.set_title(if grabbed {
+                        "LinRDP — VNC — keyboard captured; Ctrl+Alt+Shift+Esc releases"
+                    } else {
+                        "LinRDP — VNC — Ctrl+Alt+Shift+Enter captures keyboard"
+                    });
+                } else {
+                    window.set_title("LinRDP — VNC — keyboard capture unavailable");
+                }
+            }
             for event in events {
                 if focused || matches!(&event,X11Event::KeyEvent(key) if !key.down) {
                     runtime.block_on(client.input(event))?;
@@ -433,8 +535,9 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                     }
                 }
                 if let Some((_, scroll)) = window.get_scroll_wheel() {
-                    let bit = if scroll > 0.0 { 8 } else { 16 };
-                    for _ in 0..(scroll.abs().ceil() as usize).min(16) {
+                    let steps = scroll_steps(&mut scroll_accumulator, scroll);
+                    let bit = if steps > 0 { 8 } else { 16 };
+                    for _ in 0..steps.unsigned_abs() {
                         runtime.block_on(client.input(X11Event::PointerEvent(
                             (position.0, position.1, mask | bit).into(),
                         )))?;
@@ -593,5 +696,57 @@ mod tests {
         c.resize(100, 200).unwrap();
         assert_eq!(pointer(25.0, 50.0, (50, 100), &c), (50, 100));
         assert_eq!(pointer(1000.0, -2.0, (50, 100), &c), (99, 0));
+    }
+    #[test]
+    fn aspect_ratio_pointer_excludes_letterbox_bars() {
+        let mut canvas = Canvas::default();
+        canvas.resize(1920, 1080).unwrap();
+        assert_eq!(viewport((1000, 1000), &canvas), (0, 219, 1000, 562));
+        assert_eq!(pointer(500.0, 219.0, (1000, 1000), &canvas), (960, 0));
+        assert_eq!(pointer(500.0, 999.0, (1000, 1000), &canvas), (960, 1079));
+    }
+    #[test]
+    fn scroll_accumulates_and_caps_each_frame() {
+        let mut accumulator = 0.0;
+        assert_eq!(scroll_steps(&mut accumulator, 1.0), 0);
+        assert_eq!(scroll_steps(&mut accumulator, 3.0), 1);
+        assert_eq!(scroll_steps(&mut accumulator, 40.0), 2);
+        assert_eq!(scroll_steps(&mut accumulator, 0.0), 2);
+    }
+    #[test]
+    fn server_rounded_resize_does_not_create_feedback() {
+        assert!(!valid_resize_request(
+            (1920, 1080),
+            (1920, 1080),
+            Some((1906, 1045))
+        ));
+        assert!(!valid_resize_request(
+            (1906, 1045),
+            (1920, 1080),
+            Some((1906, 1045))
+        ));
+        assert!(valid_resize_request(
+            (1200, 700),
+            (1920, 1080),
+            Some((1906, 1045))
+        ));
+    }
+    #[test]
+    fn keyboard_capture_chords_are_local_and_release_remote_modifiers() {
+        let mut keyboard = Keyboard::default();
+        keyboard.key(Key::LeftCtrl, true);
+        keyboard.key(Key::LeftAlt, true);
+        keyboard.key(Key::LeftShift, true);
+        keyboard.key(Key::Enter, true);
+        assert_eq!(keyboard.take_grab_change(), Some(true));
+        assert!(keyboard.drain().is_empty());
+        assert!(keyboard.held.is_empty());
+
+        keyboard.key(Key::LeftCtrl, true);
+        keyboard.key(Key::LeftAlt, true);
+        keyboard.key(Key::LeftShift, true);
+        keyboard.key(Key::Escape, true);
+        assert_eq!(keyboard.take_grab_change(), Some(false));
+        assert!(keyboard.drain().is_empty());
     }
 }

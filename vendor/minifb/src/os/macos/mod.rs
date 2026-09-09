@@ -334,6 +334,10 @@ impl Window {
         }
     }
 
+    pub fn set_keyboard_shortcuts_inhibited(&mut self, _inhibited: bool) -> bool {
+        false
+    }
+
     #[inline]
     pub fn set_icon(&mut self, _icon: Icon) {
         unimplemented!("Currently not implemented on MacOS!")

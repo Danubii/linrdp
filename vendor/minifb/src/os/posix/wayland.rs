@@ -37,7 +37,13 @@ use wayland_client::{
     Attached, Display, EventQueue, GlobalManager, Main,
 };
 use wayland_protocols::{
-    unstable::xdg_decoration::v1::client::zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
+    unstable::{
+        keyboard_shortcuts_inhibit::v1::client::{
+            zwp_keyboard_shortcuts_inhibit_manager_v1::ZwpKeyboardShortcutsInhibitManagerV1,
+            zwp_keyboard_shortcuts_inhibitor_v1::ZwpKeyboardShortcutsInhibitorV1,
+        },
+        xdg_decoration::v1::client::zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
+    },
     xdg_shell::client::{
         xdg_surface::XdgSurface, xdg_toplevel::XdgToplevel, xdg_wm_base::XdgWmBase,
     },
@@ -185,6 +191,9 @@ struct DisplayInfo {
     _display: Display,
     buf_pool: BufferPool,
     redraw_pending: bool,
+    shortcut_manager: Option<Main<ZwpKeyboardShortcutsInhibitManagerV1>>,
+    shortcut_inhibitor: Option<Main<ZwpKeyboardShortcutsInhibitorV1>>,
+    seat: Main<WlSeat>,
 }
 
 impl DisplayInfo {
@@ -212,6 +221,9 @@ impl DisplayInfo {
             .map_err(|e| Error::WindowCreate(format!("Failed to retrieve the WlSeat: {:?}", e)))?;
 
         let input_devices = WaylandInput::new(&seat);
+        let shortcut_manager = globals
+            .instantiate_exact::<ZwpKeyboardShortcutsInhibitManagerV1>(1)
+            .ok();
         let compositor = globals.instantiate_exact::<WlCompositor>(4).map_err(|e| {
             Error::WindowCreate(format!("Failed to retrieve the compositor: {:?}", e))
         })?;
@@ -326,6 +338,9 @@ impl DisplayInfo {
                 cursor_surface,
                 buf_pool,
                 redraw_pending: false,
+                shortcut_manager,
+                shortcut_inhibitor: None,
+                seat,
             },
             input_devices,
         ))
@@ -340,6 +355,24 @@ impl DisplayInfo {
     #[inline]
     fn set_title(&self, title: &str) {
         self.toplevel.set_title(title.to_owned());
+    }
+
+    fn set_keyboard_shortcuts_inhibited(&mut self, inhibited: bool) -> bool {
+        if inhibited && self.shortcut_inhibitor.is_none() {
+            let Some(manager) = &self.shortcut_manager else {
+                return false;
+            };
+            let inhibitor = manager.inhibit_shortcuts(&self.surface, &self.seat);
+            inhibitor.quick_assign(|_, _, _| {});
+            self.shortcut_inhibitor = Some(inhibitor);
+            self.surface.commit();
+        } else if !inhibited {
+            if let Some(inhibitor) = self.shortcut_inhibitor.take() {
+                inhibitor.destroy();
+                self.surface.commit();
+            }
+        }
+        true
     }
 
     #[inline]
@@ -602,6 +635,10 @@ impl Window {
     #[inline]
     pub fn set_title(&mut self, title: &str) {
         self.display.set_title(title);
+    }
+
+    pub fn set_keyboard_shortcuts_inhibited(&mut self, inhibited: bool) -> bool {
+        self.display.set_keyboard_shortcuts_inhibited(inhibited)
     }
 
     #[inline]

@@ -6,7 +6,8 @@ Vendored from vnc-rs 0.5.3 (MIT OR Apache-2.0).
 SetResolution through either recv_event or poll_event. Subsequent Refresh and
 FullRefresh requests must cover the current server desktop, not ServerInit's
 original size. Verified with a loopback RFB DesktopSize update and inspection
-of the client's subsequent FramebufferUpdateRequest messages.
+of the following refresh request. The client also exposes ExtendedDesktopSize
+notifications and SetDesktopSize requests for dynamic single-screen resizing.
 
 `client/auth.rs`: read the entire RFB 3.7/3.8 security offer and ignore unknown
 alternatives when None or VNC password is offered. If there is no supported

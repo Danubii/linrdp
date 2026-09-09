@@ -18,6 +18,14 @@ pub struct Screen {
     pub height: u16,
 }
 
+/// A single ExtendedDesktopSize screen and its server-assigned identifier.
+#[derive(Debug, Clone)]
+pub struct DesktopScreen {
+    pub id: u32,
+    pub width: u16,
+    pub height: u16,
+}
+
 impl From<(u16, u16)> for Screen {
     fn from(tuple: (u16, u16)) -> Self {
         Self {
@@ -48,6 +56,10 @@ pub enum VncEvent {
     /// If the [crate::VncEncoding::DesktopSizePseudo] is set
     ///
     SetResolution(Screen),
+    /// The server supports client-requested ExtendedDesktopSize changes.
+    DesktopResizeAvailable(DesktopScreen),
+    /// The server rejected a client-requested desktop size.
+    DesktopResizeRejected { reason: u16, status: u16 },
     /// If the connector doesn't call `set_pixel_format` method
     ///
     /// The engine will generate a [VncEvent::SetPixelFormat] to let the window know how to render image
@@ -138,6 +150,8 @@ pub enum X11Event {
     /// Forces the server to send the entire framebuffer, useful after
     /// CursorPseudo is negotiated to clear cursor ghosts from the framebuffer.
     FullRefresh,
+    /// Request a single-screen framebuffer size through ExtendedDesktopSize.
+    SetDesktopSize(DesktopScreen),
     /// Key down/up
     ///
     KeyEvent(ClientKeyEvent),

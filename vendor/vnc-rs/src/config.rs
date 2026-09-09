@@ -14,6 +14,7 @@ pub enum VncEncoding {
     Trle = 15,
     Zrle = 16,
     CursorPseudo = -239,
+    ExtendedDesktopSizePseudo = -308,
     DesktopSizePseudo = -223,
     LastRectPseudo = -224,
 }
@@ -30,6 +31,7 @@ impl From<u32> for VncEncoding {
             15 => VncEncoding::Trle,
             16 => VncEncoding::Zrle,
             -239 => VncEncoding::CursorPseudo,
+            -308 => VncEncoding::ExtendedDesktopSizePseudo,
             -223 => VncEncoding::DesktopSizePseudo,
             -224 => VncEncoding::LastRectPseudo,
             _ => VncEncoding::Raw,

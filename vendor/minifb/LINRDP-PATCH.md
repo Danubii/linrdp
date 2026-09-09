@@ -30,6 +30,12 @@ The pool is capped at three buffers. If all are busy, submission is deferred
 while input and release events continue dispatching; `needs_redraw` stays set
 until the latest image is submitted, including a final static frame.
 
+Aspect-preserving POSIX scaling now uses bilinear interpolation instead of the
+previous nearest-neighbor implementation, which keeps text edges readable when
+a fixed remote framebuffer must be reduced. The Wayland backend also exposes
+the standard keyboard-shortcuts-inhibit protocol. LinRDP uses it only after an
+explicit local capture chord and retains a separate local release chord.
+
 Run the bounded-pool unit test with:
 
 ```sh

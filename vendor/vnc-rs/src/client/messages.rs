@@ -6,6 +6,7 @@ pub(super) enum ClientMsg {
     SetPixelFormat(PixelFormat),
     SetEncodings(Vec<VncEncoding>),
     FramebufferUpdateRequest(Rect, u8),
+    SetDesktopSize(u32, u16, u16),
     KeyEvent(u32, bool),
     PointerEvent(u16, u16, u8),
     ClientCutText(String),
@@ -69,6 +70,20 @@ impl ClientMsg {
                 payload.extend_from_slice(&rect.y.to_be_bytes());
                 payload.extend_from_slice(&rect.width.to_be_bytes());
                 payload.extend_from_slice(&rect.height.to_be_bytes());
+                writer.write_all(&payload).await?;
+                Ok(())
+            }
+            ClientMsg::SetDesktopSize(screen_id, width, height) => {
+                let mut payload = vec![251, 0];
+                payload.extend_from_slice(&width.to_be_bytes());
+                payload.extend_from_slice(&height.to_be_bytes());
+                payload.extend_from_slice(&[1, 0]);
+                payload.extend_from_slice(&screen_id.to_be_bytes());
+                payload.extend_from_slice(&0u16.to_be_bytes());
+                payload.extend_from_slice(&0u16.to_be_bytes());
+                payload.extend_from_slice(&width.to_be_bytes());
+                payload.extend_from_slice(&height.to_be_bytes());
+                payload.extend_from_slice(&0u32.to_be_bytes());
                 writer.write_all(&payload).await?;
                 Ok(())
             }
@@ -191,5 +206,31 @@ impl ServerMsg {
             }
             _ => Err(VncError::WrongServerMessage),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn set_desktop_size_encodes_one_screen_layout() {
+        let (mut writer, mut reader) = tokio::io::duplex(64);
+        ClientMsg::SetDesktopSize(0x12345678, 1200, 700)
+            .write(&mut writer)
+            .await
+            .unwrap();
+        let mut actual = [0u8; 24];
+        reader.read_exact(&mut actual).await.unwrap();
+        let mut expected = vec![251, 0];
+        expected.extend_from_slice(&1200u16.to_be_bytes());
+        expected.extend_from_slice(&700u16.to_be_bytes());
+        expected.extend_from_slice(&[1, 0]);
+        expected.extend_from_slice(&0x12345678u32.to_be_bytes());
+        expected.extend_from_slice(&[0; 4]);
+        expected.extend_from_slice(&1200u16.to_be_bytes());
+        expected.extend_from_slice(&700u16.to_be_bytes());
+        expected.extend_from_slice(&[0; 4]);
+        assert_eq!(actual.as_slice(), expected);
     }
 }

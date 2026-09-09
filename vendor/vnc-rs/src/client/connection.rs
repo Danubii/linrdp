@@ -193,6 +193,9 @@ impl VncInner {
                     },
                     0, // non-incremental: server sends entire framebuffer
                 ),
+                X11Event::SetDesktopSize(screen) => {
+                    ClientMsg::SetDesktopSize(screen.id, screen.width, screen.height)
+                }
                 X11Event::KeyEvent(key) => ClientMsg::KeyEvent(key.keycode, key.down),
                 X11Event::PointerEvent(mouse) => {
                     ClientMsg::PointerEvent(mouse.position_x, mouse.position_y, mouse.bottons)
@@ -467,6 +470,39 @@ where
                                 (rect.rect.width, rect.rect.height).into(),
                             ))
                             .await?;
+                        }
+                        VncEncoding::ExtendedDesktopSizePseudo => {
+                            let screens = stream.read_u8().await? as usize;
+                            let mut padding = [0u8; 3];
+                            stream.read_exact(&mut padding).await?;
+                            let mut screen_id = None;
+                            for index in 0..screens {
+                                let mut screen = [0u8; 16];
+                                stream.read_exact(&mut screen).await?;
+                                if index == 0 {
+                                    screen_id = Some(u32::from_be_bytes(
+                                        screen[..4].try_into().unwrap(),
+                                    ));
+                                }
+                            }
+                            if rect.rect.y == 0 {
+                                if let Some(id) = screen_id {
+                                    output_func(VncEvent::DesktopResizeAvailable(
+                                        crate::DesktopScreen {
+                                            id,
+                                            width: rect.rect.width,
+                                            height: rect.rect.height,
+                                        },
+                                    ))
+                                    .await?;
+                                }
+                            } else {
+                                output_func(VncEvent::DesktopResizeRejected {
+                                    reason: rect.rect.x,
+                                    status: rect.rect.y,
+                                })
+                                .await?;
+                            }
                         }
                         VncEncoding::LastRectPseudo => {
                             break;

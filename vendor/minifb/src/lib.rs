@@ -372,6 +372,12 @@ impl Window {
         self.0.set_title(title)
     }
 
+    /// Ask the Wayland compositor to route its keyboard shortcuts to this window.
+    /// Returns false when the active backend does not support shortcut inhibition.
+    pub fn set_keyboard_shortcuts_inhibited(&mut self, inhibited: bool) -> bool {
+        self.0.set_keyboard_shortcuts_inhibited(inhibited)
+    }
+
     /// Sets the icon of the window after creation.
     ///
     /// The file path has to be relative to the current working directory.

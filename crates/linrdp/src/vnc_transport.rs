@@ -257,6 +257,7 @@ pub async fn connect(host: &str, port: u16, user: Option<&str>) -> Result<VncCli
         VncEncoding::Zrle,
         VncEncoding::CopyRect,
         VncEncoding::Raw,
+        VncEncoding::ExtendedDesktopSizePseudo,
         VncEncoding::DesktopSizePseudo,
         VncEncoding::LastRectPseudo,
     ];
