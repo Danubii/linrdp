@@ -348,6 +348,9 @@ fn scroll_steps(accumulator: &mut f32, delta: f32) -> i8 {
     *accumulator -= f32::from(steps);
     steps
 }
+fn scroll_button(steps: i8) -> u8 {
+    if steps > 0 { 16 } else { 8 }
+}
 fn valid_resize_request(
     size: (usize, usize),
     framebuffer: (usize, usize),
@@ -536,7 +539,7 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                 }
                 if let Some((_, scroll)) = window.get_scroll_wheel() {
                     let steps = scroll_steps(&mut scroll_accumulator, scroll);
-                    let bit = if steps > 0 { 8 } else { 16 };
+                    let bit = scroll_button(steps);
                     for _ in 0..steps.unsigned_abs() {
                         runtime.block_on(client.input(X11Event::PointerEvent(
                             (position.0, position.1, mask | bit).into(),
@@ -712,6 +715,8 @@ mod tests {
         assert_eq!(scroll_steps(&mut accumulator, 3.0), 1);
         assert_eq!(scroll_steps(&mut accumulator, 40.0), 2);
         assert_eq!(scroll_steps(&mut accumulator, 0.0), 2);
+        assert_eq!(scroll_button(1), 16);
+        assert_eq!(scroll_button(-1), 8);
     }
     #[test]
     fn server_rounded_resize_does_not_create_feedback() {

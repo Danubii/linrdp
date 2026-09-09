@@ -108,20 +108,17 @@ void image_resize_linear_aspect_fill(
         dst[i] = bg_clear;
     }
 
-    const float buffer_aspect = (float)(src_width) / (float)(src_height);
-    const float win_aspect = (float)(dst_width) / (float)(dst_height);
-
-    if (buffer_aspect > win_aspect) {
-        const uint32_t new_height = (uint32_t)(dst_width / buffer_aspect);
-        const int offset = (new_height - dst_height) / -2;
+    if ((uint64_t)src_width * dst_height > (uint64_t)dst_width * src_height) {
+        const uint32_t new_height = (uint32_t)(((uint64_t)dst_width * src_height) / src_width);
+        const uint32_t offset = (dst_height - new_height) / 2;
         image_resize_linear(
             dst + (offset * dst_width),
             dst_width, new_height,
             src, src_width, src_height, src_stride
         );
     } else {
-        const uint32_t new_width = (uint32_t)(dst_height * buffer_aspect);
-        const int offset = (new_width - dst_width) / -2;
+        const uint32_t new_width = (uint32_t)(((uint64_t)dst_height * src_width) / src_height);
+        const uint32_t offset = (dst_width - new_width) / 2;
         image_resize_linear_stride(
             dst + offset,
             new_width, dst_height,
