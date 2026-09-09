@@ -648,9 +648,6 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                 ..WindowOptions::default()
             },
         )?;
-        // The remote desktop already draws its own pointer. Hiding the local
-        // pointer avoids displaying a second, slightly offset host cursor.
-        window.set_cursor_visibility(false);
         window.set_target_fps(120);
         let keyboard = Arc::new(Mutex::new(Keyboard::default()));
         window.set_input_callback(Box::new(Callback(keyboard.clone())));

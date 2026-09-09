@@ -35,7 +35,9 @@ When the server advertises ExtendedDesktopSize, stable local window changes send
 a single-screen SetDesktopSize request after a short debounce. Server-rounded
 sizes do not create request feedback. If the server rejects the request, the
 remote framebuffer is scaled across the complete client window and pointer
-coordinates use that same full-window transform. Wheel deltas are accumulated
+coordinates use that same full-window transform. Cursor pseudo-encoding keeps
+the responsive local client pointer visible while the server omits its pointer
+from framebuffer updates. Wheel deltas are accumulated
 and rate-limited before being translated into VNC button pulses. Clipboard text
 is synchronized in both directions through the standard RFB ClientCutText and
 ServerCutText messages. RFB does not define the file-copy protocol used by RDP,

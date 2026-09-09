@@ -261,6 +261,9 @@ pub async fn connect(host: &str, port: u16, user: Option<&str>) -> Result<VncCli
         VncEncoding::Zrle,
         VncEncoding::CopyRect,
         VncEncoding::Raw,
+        // Ask the server to remove its pointer from framebuffer updates. The
+        // frontend keeps the responsive local client cursor visible.
+        VncEncoding::CursorPseudo,
         VncEncoding::QemuExtendedKeyEventPseudo,
         VncEncoding::ExtendedDesktopSizePseudo,
         VncEncoding::DesktopSizePseudo,
