@@ -1,5 +1,37 @@
 #include <stdint.h>
 
+static uint32_t bilinear_pixel(
+    const uint32_t* src,
+    const uint32_t stride,
+    const uint32_t x,
+    const uint32_t y,
+    const uint32_t next_x,
+    const uint32_t next_y,
+    const uint32_t fx,
+    const uint32_t fy
+) {
+    const uint32_t p00 = src[y * stride + x];
+    const uint32_t p10 = src[y * stride + next_x];
+    const uint32_t p01 = src[next_y * stride + x];
+    const uint32_t p11 = src[next_y * stride + next_x];
+    const uint32_t wx0 = 256 - fx;
+    const uint32_t wy0 = 256 - fy;
+    const uint32_t w00 = wx0 * wy0;
+    const uint32_t w10 = fx * wy0;
+    const uint32_t w01 = wx0 * fy;
+    const uint32_t w11 = fx * fy;
+    uint32_t out = 0;
+    for (uint32_t shift = 0; shift < 32; shift += 8) {
+        const uint32_t value =
+            (((p00 >> shift) & 255) * w00 +
+             ((p10 >> shift) & 255) * w10 +
+             ((p01 >> shift) & 255) * w01 +
+             ((p11 >> shift) & 255) * w11 + 32768) >> 16;
+        out |= value << shift;
+    }
+    return out;
+}
+
 void image_resize_linear(
     uint32_t* dst,
     const uint32_t dst_width,
@@ -9,19 +41,20 @@ void image_resize_linear(
     const uint32_t src_height,
     const uint32_t src_stride
 ) {
-    const float x_ratio = (float)(src_width) / (float)(dst_width);
-    const float y_ratio = (float)(src_height) / (float)(dst_height);
-    const int step_x = x_ratio * 1024.0f;
-    const int step_y = y_ratio * 1024.0f;
-    int fixed_y = 0;
+    const uint32_t step_x = dst_width > 1 ? ((src_width - 1) << 16) / (dst_width - 1) : 0;
+    const uint32_t step_y = dst_height > 1 ? ((src_height - 1) << 16) / (dst_height - 1) : 0;
+    uint32_t fixed_y = 0;
 
     for (uint32_t i = 0; i < dst_height; i++) {
-        const int y = (fixed_y >> 10) * src_stride;
-        int fixed_x = 0;
+        const uint32_t y = fixed_y >> 16;
+        const uint32_t next_y = y + (y + 1 < src_height);
+        const uint32_t fy = (fixed_y >> 8) & 255;
+        uint32_t fixed_x = 0;
         for (uint32_t j = 0; j < dst_width; j++) {
-            int x = fixed_x >> 10;
-            int index = (y + x);
-            *dst++ = src[index];
+            const uint32_t x = fixed_x >> 16;
+            const uint32_t next_x = x + (x + 1 < src_width);
+            const uint32_t fx = (fixed_x >> 8) & 255;
+            *dst++ = bilinear_pixel(src, src_stride, x, y, next_x, next_y, fx, fy);
             fixed_x += step_x;
         }
         fixed_y += step_y;
@@ -38,20 +71,21 @@ static void image_resize_linear_stride(
     const uint32_t src_stride,
     const uint32_t stride
 ) {
-    const float x_ratio = (float)(src_width) / (float)(dst_width);
-    const float y_ratio = (float)(src_height) / (float)(dst_height);
-    const int step_x = x_ratio * 1024.0f;
-    const int step_y = y_ratio * 1024.0f;
+    const uint32_t step_x = dst_width > 1 ? ((src_width - 1) << 16) / (dst_width - 1) : 0;
+    const uint32_t step_y = dst_height > 1 ? ((src_height - 1) << 16) / (dst_height - 1) : 0;
     const int stride_step = stride - dst_width;
-    int fixed_y = 0;
+    uint32_t fixed_y = 0;
 
     for (uint32_t i = 0; i < dst_height; i++) {
-        const int y = (fixed_y >> 10) * src_stride;
-        int fixed_x = 0;
+        const uint32_t y = fixed_y >> 16;
+        const uint32_t next_y = y + (y + 1 < src_height);
+        const uint32_t fy = (fixed_y >> 8) & 255;
+        uint32_t fixed_x = 0;
         for (uint32_t j = 0; j < dst_width; j++) {
-            const int x = fixed_x >> 10;
-            const int index = (y + x);
-            *dst++ = src[index];
+            const uint32_t x = fixed_x >> 16;
+            const uint32_t next_x = x + (x + 1 < src_width);
+            const uint32_t fx = (fixed_x >> 8) & 255;
+            *dst++ = bilinear_pixel(src, src_stride, x, y, next_x, next_y, fx, fy);
             fixed_x += step_x;
         }
         dst += stride_step;
@@ -74,20 +108,17 @@ void image_resize_linear_aspect_fill(
         dst[i] = bg_clear;
     }
 
-    const float buffer_aspect = (float)(src_width) / (float)(src_height);
-    const float win_aspect = (float)(dst_width) / (float)(dst_height);
-
-    if (buffer_aspect > win_aspect) {
-        const uint32_t new_height = (uint32_t)(dst_width / buffer_aspect);
-        const int offset = (new_height - dst_height) / -2;
+    if ((uint64_t)src_width * dst_height > (uint64_t)dst_width * src_height) {
+        const uint32_t new_height = (uint32_t)(((uint64_t)dst_width * src_height) / src_width);
+        const uint32_t offset = (dst_height - new_height) / 2;
         image_resize_linear(
             dst + (offset * dst_width),
             dst_width, new_height,
             src, src_width, src_height, src_stride
         );
     } else {
-        const uint32_t new_width = (uint32_t)(dst_height * buffer_aspect);
-        const int offset = (new_width - dst_width) / -2;
+        const uint32_t new_width = (uint32_t)(((uint64_t)dst_height * src_width) / src_height);
+        const uint32_t offset = (dst_width - new_width) / 2;
         image_resize_linear_stride(
             dst + offset,
             new_width, dst_height,

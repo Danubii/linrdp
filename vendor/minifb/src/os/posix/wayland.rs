@@ -37,7 +37,15 @@ use wayland_client::{
     Attached, Display, EventQueue, GlobalManager, Main,
 };
 use wayland_protocols::{
-    unstable::xdg_decoration::v1::client::zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
+    unstable::{
+        keyboard_shortcuts_inhibit::v1::client::{
+            zwp_keyboard_shortcuts_inhibit_manager_v1::ZwpKeyboardShortcutsInhibitManagerV1,
+            zwp_keyboard_shortcuts_inhibitor_v1::{
+                Event as ShortcutInhibitorEvent, ZwpKeyboardShortcutsInhibitorV1,
+            },
+        },
+        xdg_decoration::v1::client::zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
+    },
     xdg_shell::client::{
         xdg_surface::XdgSurface, xdg_toplevel::XdgToplevel, xdg_wm_base::XdgWmBase,
     },
@@ -185,6 +193,10 @@ struct DisplayInfo {
     _display: Display,
     buf_pool: BufferPool,
     redraw_pending: bool,
+    shortcut_manager: Option<Main<ZwpKeyboardShortcutsInhibitManagerV1>>,
+    shortcut_inhibitor: Option<Main<ZwpKeyboardShortcutsInhibitorV1>>,
+    shortcut_inhibitor_active: Rc<RefCell<bool>>,
+    seat: Main<WlSeat>,
 }
 
 impl DisplayInfo {
@@ -212,6 +224,9 @@ impl DisplayInfo {
             .map_err(|e| Error::WindowCreate(format!("Failed to retrieve the WlSeat: {:?}", e)))?;
 
         let input_devices = WaylandInput::new(&seat);
+        let shortcut_manager = globals
+            .instantiate_exact::<ZwpKeyboardShortcutsInhibitManagerV1>(1)
+            .ok();
         let compositor = globals.instantiate_exact::<WlCompositor>(4).map_err(|e| {
             Error::WindowCreate(format!("Failed to retrieve the compositor: {:?}", e))
         })?;
@@ -326,6 +341,10 @@ impl DisplayInfo {
                 cursor_surface,
                 buf_pool,
                 redraw_pending: false,
+                shortcut_manager,
+                shortcut_inhibitor: None,
+                shortcut_inhibitor_active: Rc::new(RefCell::new(false)),
+                seat,
             },
             input_devices,
         ))
@@ -340,6 +359,36 @@ impl DisplayInfo {
     #[inline]
     fn set_title(&self, title: &str) {
         self.toplevel.set_title(title.to_owned());
+    }
+
+    fn set_keyboard_shortcuts_inhibited(&mut self, inhibited: bool) -> bool {
+        if inhibited && self.shortcut_inhibitor.is_none() {
+            let Some(manager) = &self.shortcut_manager else {
+                return false;
+            };
+            let inhibitor = manager.inhibit_shortcuts(&self.surface, &self.seat);
+            let active = self.shortcut_inhibitor_active.clone();
+            inhibitor.quick_assign(move |_, event, _| match event {
+                ShortcutInhibitorEvent::Active => *active.borrow_mut() = true,
+                ShortcutInhibitorEvent::Inactive => *active.borrow_mut() = false,
+                _ => {}
+            });
+            self.shortcut_inhibitor = Some(inhibitor);
+            self.surface.commit();
+        } else if !inhibited {
+            if let Some(inhibitor) = self.shortcut_inhibitor.take() {
+                inhibitor.destroy();
+                self.surface.commit();
+            }
+            *self.shortcut_inhibitor_active.borrow_mut() = false;
+        }
+        true
+    }
+
+    fn keyboard_shortcuts_inhibited(&self) -> Option<bool> {
+        self.shortcut_manager
+            .as_ref()
+            .map(|_| *self.shortcut_inhibitor_active.borrow())
     }
 
     #[inline]
@@ -602,6 +651,14 @@ impl Window {
     #[inline]
     pub fn set_title(&mut self, title: &str) {
         self.display.set_title(title);
+    }
+
+    pub fn set_keyboard_shortcuts_inhibited(&mut self, inhibited: bool) -> bool {
+        self.display.set_keyboard_shortcuts_inhibited(inhibited)
+    }
+
+    pub fn keyboard_shortcuts_inhibited(&self) -> Option<bool> {
+        self.display.keyboard_shortcuts_inhibited()
     }
 
     #[inline]
@@ -1161,13 +1218,12 @@ impl Window {
                 key::XKB_KEY_KP_Add => Key::NumPadPlus,
                 key::XKB_KEY_KP_Enter => Key::NumPadEnter,
 
-                _ => {
-                    // Ignore other keys
-                    return;
-                }
+                _ => Key::Unknown,
             };
 
-            key_handler.set_key_state(key_i, is_down);
+            // xkbcommon keycodes are Linux evdev codes plus 8. Expose the
+            // original evdev code to consumers that need physical keys.
+            key_handler.set_key_state_raw(key_i, is_down, key - KEY_XKB_OFFSET);
         }
     }
 
@@ -1253,11 +1309,22 @@ impl Window {
     ) -> Result<()> {
         check_buffer_size(buffer, buf_width, buf_height, buf_stride)?;
 
-        unsafe { self.scale_buffer(buffer, buf_width, buf_height, buf_stride) };
-
-        self.display
-            .update_framebuffer(&self.buffer, (self.width, self.height))
-            .map_err(|e| Error::UpdateFailed(format!("Error updating framebuffer: {:?}", e)))?;
+        // LinRDP already supplies window-sized pixels, including letterboxing.
+        // Submit packed, native-sized input directly instead of resampling and
+        // copying every pixel through an intermediate buffer a second time.
+        let native = buf_width == self.width as usize
+            && buf_height == self.height as usize
+            && buf_stride == buf_width;
+        let result = if native {
+            self.display.update_framebuffer(
+                &buffer[..buf_width * buf_height],
+                (self.width, self.height),
+            )
+        } else {
+            unsafe { self.scale_buffer(buffer, buf_width, buf_height, buf_stride) };
+            self.display.update_framebuffer(&self.buffer, (self.width, self.height))
+        };
+        result.map_err(|e| Error::UpdateFailed(format!("Error updating framebuffer: {:?}", e)))?;
         self.update();
 
         Ok(())
@@ -1388,6 +1455,29 @@ mod linrdp_buffer_tests {
         assert!(select_buffer(released.iter().copied()).is_err());
         released[2] = true;
         assert_eq!(select_buffer(released.iter().copied()).unwrap(), Some(2));
+    }
+
+    #[test]
+    #[ignore = "opens a small native Wayland window; requires a running compositor"]
+    fn native_sized_submission_bypasses_scaler_and_preserves_pixels() {
+        use std::os::unix::fs::FileExt;
+        let mut window = Window::new("LinRDP native submission test", 64, 64, WindowOptions::default()).unwrap();
+        let pixels: Vec<u32> = (0..64 * 64).map(|i| 0x123400 + i).collect();
+        let scratch = window.buffer.clone();
+        window.update_with_buffer_stride(&pixels, 64, 64, 64).unwrap();
+        assert_eq!(window.buffer, scratch, "native submission invoked the scaler");
+        assert!(window.display.buf_pool.pool.iter().any(|entry| {
+            let mut bytes = vec![0; pixels.len() * 4];
+            entry.fd.read_exact_at(&mut bytes, 0).unwrap();
+            bytes.chunks_exact(4).zip(&pixels).all(|(b, p)| {
+                u32::from_ne_bytes([b[0], b[1], b[2], b[3]]) == *p
+            })
+        }));
+        // Padded rows must still use the stride-aware scaling path.
+        let mut padded = vec![0xdeadbeef; 65 * 64];
+        for row in 0..64 { padded[row * 65..row * 65 + 64].copy_from_slice(&pixels[row * 64..row * 64 + 64]); }
+        window.update_with_buffer_stride(&padded, 64, 64, 65).unwrap();
+        assert_eq!(window.buffer, pixels);
     }
 
     #[test]

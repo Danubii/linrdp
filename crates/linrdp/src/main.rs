@@ -8,6 +8,8 @@ mod tls;
 mod trust_store;
 mod tui;
 mod viewer;
+mod vnc;
+mod vnc_transport;
 
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -24,7 +26,8 @@ Usage: linrdp probe <host> [port]
        linrdp nla-probe <host> [port] [trust-option]
        linrdp login <host> [port] --user <username|DOMAIN\\username> [trust-option]
        linrdp session-probe <host> [port] --user <username> [trust-option]
-       linrdp connect <host> [port] --user <username> [trust-option] [--size WIDTHxHEIGHT] [--dynamic-resolution on|off] [--clipboard on|off]
+       linrdp connect <host> [port] --user <username> [trust-option] [--size WIDTHxHEIGHT] [--dynamic-resolution on|off] [--clipboard on|off] [--graphics bitmap|h264]
+       linrdp vnc <host> [port] [--user <username>]
        linrdp tui
        linrdp --help
        linrdp --version
@@ -36,6 +39,8 @@ nla-probe requests an NTLM challenge without credentials.
 login prompts locally for a hidden password after TLS verification, then
 attempts NTLM CredSSP once. session-probe continues with MCS/GCC and channel
 setup after login, then disconnects. connect opens an interactive desktop window.
+Graphics defaults to bitmap. --graphics h264 requests experimental AVC420;
+the server selects the actual codec. H.264 can also be enabled in TUI Options.
 connect defaults to 1024x768, dynamic resolution on, and clipboard on
 (Wayland text and file copy/paste). --size selects the initial dimensions;
 later window resizing uses Display Control when the server makes it available,
@@ -88,7 +93,7 @@ fn run_tui_connection(args: Vec<String>) -> Result<Result<(), String>, Box<dyn s
         Ok(options) => options,
         Err(error) => return Ok(Err(format!("Check connection details: {error}"))),
     };
-    if options.ca_file.is_some() || options.fingerprint.is_some() {
+    if options.vnc || options.ca_file.is_some() || options.fingerprint.is_some() {
         return Ok(run(args).map_err(|error| format!("Connection ended: {error}")));
     }
     let store = match trust_store::Store::discover() {
@@ -253,6 +258,9 @@ fn run_with_tls_hook(
         return Ok(());
     }
     let options = Options::parse(&args)?;
+    if options.vnc {
+        return vnc::run(&options.host, options.port, options.user.as_deref());
+    }
     let host = &options.host;
     let port = options.port;
     // Validate the trust source and server name before any network access.
@@ -326,6 +334,7 @@ fn run_with_tls_hook(
                                     height: options.size.unwrap_or((1024, 768)).1,
                                     clipboard: options.clipboard,
                                     dynamic_resolution: options.dynamic_resolution,
+                                    h264: options.h264,
                                     ..Default::default()
                                 },
                             )?;
@@ -358,6 +367,7 @@ fn run_with_tls_hook(
 
 #[derive(Debug, PartialEq, Eq)]
 struct Options {
+    vnc: bool,
     tls: bool,
     nla: bool,
     session: bool,
@@ -365,6 +375,7 @@ struct Options {
     size: Option<(u16, u16)>,
     clipboard: bool,
     dynamic_resolution: bool,
+    h264: bool,
     user: Option<String>,
     host: String,
     port: u16,
@@ -377,12 +388,13 @@ impl Options {
         if args.len() < 2
             || !matches!(
                 args[0].as_str(),
-                "probe" | "tls" | "nla-probe" | "login" | "session-probe" | "connect"
+                "probe" | "tls" | "nla-probe" | "login" | "session-probe" | "connect" | "vnc"
             )
         {
             return Err(format!("invalid arguments\n\n{HELP}").into());
         }
         let mut options = Self {
+            vnc: args[0] == "vnc",
             tls: args[0] != "probe",
             nla: matches!(
                 args[0].as_str(),
@@ -393,9 +405,10 @@ impl Options {
             size: None,
             clipboard: args[0] == "connect",
             dynamic_resolution: args[0] == "connect",
+            h264: false,
             user: None,
             host: args[1].clone(),
-            port: 3389,
+            port: if args[0] == "vnc" { 5900 } else { 3389 },
             ca_file: None,
             fingerprint: None,
         };
@@ -410,8 +423,25 @@ impl Options {
         if options.port == 0 {
             return Err("port must be between 1 and 65535".into());
         }
+        if options.vnc {
+            if rest.len() == 2
+                && rest[0] == "--user"
+                && !rest[1].is_empty()
+                && !rest[1].starts_with('-')
+                && rest[1].len() <= 1024
+            {
+                options.user = Some(rest[1].clone());
+            } else if !rest.is_empty() {
+                return Err(
+                    "VNC accepts a host, optional port and --user; passwords are prompted locally"
+                        .into(),
+                );
+            }
+            return Ok(options);
+        }
         let mut clipboard_set = false;
         let mut dynamic_set = false;
+        let mut graphics_set = false;
         while !rest.is_empty() {
             if rest.len() < 2 {
                 return Err(format!("invalid arguments\n\n{HELP}").into());
@@ -440,6 +470,14 @@ impl Options {
                         _ => return Err("dynamic-resolution must be on or off".into()),
                     };
                     dynamic_set = true;
+                }
+                "--graphics" if options.view && !graphics_set => {
+                    options.h264 = match value.as_str() {
+                        "bitmap" => false,
+                        "h264" => true,
+                        _ => return Err("graphics must be bitmap or h264".into()),
+                    };
+                    graphics_set = true;
                 }
                 "--clipboard" if options.view && !clipboard_set => {
                     options.clipboard = match value.as_str() {
@@ -587,6 +625,7 @@ mod tests {
         assert_eq!(
             Options::parse(&args).unwrap(),
             Options {
+                vnc: false,
                 tls: true,
                 nla: false,
                 session: false,
@@ -594,12 +633,36 @@ mod tests {
                 size: None,
                 clipboard: false,
                 dynamic_resolution: false,
+                h264: false,
                 user: None,
                 host: "::1".into(),
                 port: 3390,
                 ca_file: Some("lab.pem".into()),
                 fingerprint: None,
             }
+        );
+    }
+
+    #[test]
+    fn graphics_is_explicit_and_only_valid_for_desktop_connections() {
+        let base = ["connect", "host.example", "--user", "tester"];
+        let parse = |extra: &[&str]| {
+            Options::parse(
+                &base
+                    .iter()
+                    .chain(extra)
+                    .map(|s| (*s).to_owned())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        assert!(!parse(&[]).unwrap().h264);
+        assert!(parse(&["--graphics", "h264"]).unwrap().h264);
+        assert!(!parse(&["--graphics", "bitmap"]).unwrap().h264);
+        assert!(parse(&["--graphics", "avc444"]).is_err());
+        assert!(parse(&["--graphics", "h264", "--graphics", "bitmap"]).is_err());
+        assert!(
+            Options::parse(&["tls", "host.example", "--graphics", "h264"].map(str::to_owned))
+                .is_err()
         );
     }
 
@@ -797,5 +860,33 @@ mod tests {
         ] {
             assert!(Options::parse(&args.map(str::to_owned)).is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod vnc_option_tests {
+    use super::*;
+    #[test]
+    fn vnc_is_explicit_and_rejects_rdp_options() {
+        let parse =
+            |args: &[&str]| Options::parse(&args.iter().map(|a| (*a).into()).collect::<Vec<_>>());
+        let options = parse(&["vnc", "localhost"]).unwrap();
+        assert!(options.vnc);
+        assert_eq!(options.port, 5900);
+        assert_eq!(parse(&["vnc", "::1", "5901"]).unwrap().port, 5901);
+        assert!(parse(&["vnc", "localhost", "0"]).is_err());
+        assert_eq!(
+            parse(&["vnc", "localhost", "--user", "tester"])
+                .unwrap()
+                .user
+                .as_deref(),
+            Some("tester")
+        );
+        assert!(parse(&["vnc", "localhost", "--cert-sha256", "00"]).is_err());
+        assert!(
+            !parse(&["connect", "localhost", "--user", "tester"])
+                .unwrap()
+                .vnc
+        );
     }
 }

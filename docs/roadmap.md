@@ -1,5 +1,10 @@
 # Roadmap
 
+Omarchy is the primary Linux desktop target. Wayland/Hyprland behavior,
+keyboard capture, native window resizing, clipboard ownership and WayVNC
+interoperability are validated there first, while portable protocol behavior
+remains suitable for other Linux desktops.
+
 All items below are planned unless explicitly marked complete.
 
 ## 0 — Foundation
@@ -12,7 +17,7 @@ All items below are planned unless explicitly marked complete.
 
 - [x] TLS diagnostic with certificate validation and explicit PEM trust.
 - [x] Explicit per-invocation SHA-256 certificate pinning for SAN-less hosts.
-- Graphical certificate review and persistent per-host trust handling.
+- [x] Terminal certificate review and persistent host/port trust for RDP and VNC.
 - [x] CredSSP TSRequest codec, bounded framing and peer version/status policy.
 - [x] CredSSP v5/v6 TLS binding state machine behind a provider interface.
 - [x] NTLM provider, TLS integration and hidden-password login diagnostic.
@@ -24,23 +29,28 @@ All items below are planned unless explicitly marked complete.
 - [x] Client information, valid-client licensing, capabilities and session activation.
 - [x] Basic raw/RLE bitmap output through slow-path and fast-path in a native window.
 - [x] Basic keyboard/pointer input forwarding, focus release and bounded input queues.
-- International layouts, IME and complete special-key handling.
+- [x] Danish/US text, shifted keys, Tab and captured Omarchy/Super shortcuts.
+- IME and broader international layout validation.
 - [x] Demonstrate an actual Windows desktop in the read-only viewer.
 - Validate interactive use before calling the client usable for everyday work.
 
 ## 2 — Simple desktop client
 
-- Native connection window: address, connect, credentials.
+- [x] Keyboard-first terminal connection manager with saved profile editing.
+- Optional graphical connection manager.
 - [x] Initial resolution selection and centered window scaling.
 - [x] Single-monitor dynamic resolution, local fallback and an initial Windows-host resize.
 - Fullscreen and useful connection errors.
-- Disconnect/reconnect and concurrent connections; see [session design](sessions.md).
+- [x] Return to the connection manager after disconnect or failure.
+- Concurrent connections; see [session design](sessions.md).
 - Validate against Windows RDP, xrdp and GNOME Remote Desktop.
 - Test Danish/US keyboards, Wayland/X11, scaling and network interruption.
 
 ## 3 — Everyday use
 
 - [x] Wayland Unicode text and clipboard files/folders in both directions with Windows.
+- [x] WayVNC TLS/authentication, dynamic resizing, input capture and text clipboard.
+- VNC file transfer where a compatible server extension is available.
 - Broader clipboard compatibility, progress/cancellation UI and paste-on-demand.
 - Audio, recent connections and opt-in keyring integration.
 - Graphics pipeline and hardware-assisted decoding where supported.

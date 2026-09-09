@@ -22,6 +22,7 @@ pub struct Settings {
     pub keyboard_layout: u32,
     pub clipboard: bool,
     pub dynamic_resolution: bool,
+    pub h264: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -31,6 +32,7 @@ impl Default for Settings {
             keyboard_layout: 0x409,
             clipboard: false,
             dynamic_resolution: false,
+            h264: false,
         }
     }
 }

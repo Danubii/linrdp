@@ -52,9 +52,14 @@ pub fn run(
     } else {
         None
     };
-    let mut resize = if settings.dynamic_resolution {
-        server.static_channels[usize::from(settings.clipboard)]
-            .map(|channel| resize::Resize::new(user, channel))
+    let mut resize = if settings.dynamic_resolution || settings.h264 {
+        server.static_channels[usize::from(settings.clipboard)].map(|channel| {
+            if settings.h264 {
+                resize::Resize::with_graphics(user, channel, settings.dynamic_resolution)
+            } else {
+                resize::Resize::new(user, channel)
+            }
+        })
     } else {
         None
     };
@@ -339,7 +344,7 @@ fn receive(
                             } else if let Some(resize) =
                                 channels.resize.as_mut().filter(|r| r.channel == channel)
                             {
-                                resize.receive(body)?
+                                resize.receive(body, state)?
                             } else {
                                 state.receive(payload)?
                             }

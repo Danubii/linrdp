@@ -41,6 +41,13 @@ impl KeyHandler {
         }
     }
 
+    pub fn set_key_state_raw(&mut self, key: Key, state: bool, raw_keycode: u32) {
+        self.keys[key as usize] = state;
+        if let Some(cb) = &mut self.key_callback {
+            cb.set_key_state_raw(key, state, raw_keycode);
+        }
+    }
+
     pub fn get_keys(&self) -> Vec<Key> {
         let mut keys: Vec<Key> = Vec::new();
 

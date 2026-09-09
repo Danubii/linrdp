@@ -22,13 +22,28 @@ pub struct Profile {
     pub port: u16,
     pub size: Option<String>,
     pub dynamic_resolution: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub h264: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub vnc: bool,
     pub clipboard: bool,
     pub ca: Option<String>,
     pub fingerprint: Option<String>,
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 impl Profile {
     pub fn arguments(&self) -> Vec<String> {
+        if self.vnc {
+            let mut args = vec!["vnc".into(), self.computer.clone(), self.port.to_string()];
+            if !self.user.is_empty() {
+                args.extend(["--user".into(), self.user.clone()]);
+            }
+            return args;
+        }
         let mut args = vec!["connect".into(), self.computer.clone()];
         if self.port != 3389 {
             args.push(self.port.to_string());
@@ -43,6 +58,9 @@ impl Profile {
             "--clipboard".into(),
             if self.clipboard { "on" } else { "off" }.into(),
         ]);
+        if self.h264 {
+            args.extend(["--graphics".into(), "h264".into()]);
+        }
         if let Some(ca) = &self.ca {
             args.extend(["--ca".into(), ca.clone()]);
         } else if let Some(fingerprint) = &self.fingerprint {
@@ -55,7 +73,7 @@ impl Profile {
         for (label, value, allow_empty) in [
             ("profile name", self.name.as_str(), false),
             ("computer", self.computer.as_str(), false),
-            ("user", self.user.as_str(), false),
+            ("user", self.user.as_str(), self.vnc),
             ("size", self.size.as_deref().unwrap_or(""), true),
             ("CA path", self.ca.as_deref().unwrap_or(""), true),
             (
@@ -175,6 +193,8 @@ mod tests {
             port: 3390,
             size: Some("1280x800".into()),
             dynamic_resolution: true,
+            h264: false,
+            vnc: false,
             clipboard: false,
             ca: Some("/tmp/lab.pem".into()),
             fingerprint: None,

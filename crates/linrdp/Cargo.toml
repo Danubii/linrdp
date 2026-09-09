@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "A simple Linux RDP client (early development)"
+description = "An Omarchy-first Linux client for RDP and VNC (early development)"
 publish = false
 
 [dependencies]
@@ -29,6 +29,10 @@ crossterm = "0.29"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 unicode-width = "0.2"
+vnc-rs = "0.5.3"
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "net", "time", "io-util", "sync"] }
+openssl = "0.10.81"
+tokio-openssl = "0.6.5"
 
 [dev-dependencies]
 rcgen = "0.14"

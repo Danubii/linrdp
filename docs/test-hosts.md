@@ -72,7 +72,7 @@ cargo run -p linrdp -- session-probe rdp-host.example 3389 --user 'MACHINE\teste
 
 The same hidden-password prompt and trust options apply. Record the server core
 version, user/I/O channel identifiers and exit code. The current diagnostic
-requests 1024×768 at 16-bit color and stops before desktop activation.
+requests 1024×768 at 32-bit color and stops before desktop activation.
 
 ## First desktop
 
@@ -85,7 +85,7 @@ icons and taskbar, not just an activated connection or a black window. Leave a
 static desktop connected, resize the local window, and record separately whether
 the remote framebuffer changed through Display Control or the client retained
 local scaling. Repeat with `--dynamic-resolution off`, then close and connect
-again. The current profile initially uses 1024×768 at 16-bit color, raw/RLE
+again. The current profile initially uses 1024×768 at 32-bit color, raw/RLE
 bitmaps and fast-path output. Dynamic resolution defaults to on and supports one
 monitor. Repeated grow/shrink changes and post-resize keyboard and text clipboard
 checks have passed on one Windows host; continue recording other server and

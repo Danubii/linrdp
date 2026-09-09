@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 mod files;
-mod native;
+pub(crate) mod native;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 pub enum Selection {
     Empty,

@@ -1,19 +1,30 @@
 # LinRDP
 
-A simple Linux RDP client: enter a computer address, connect, and get to work.
-Think VLC for RDP. Open source from the first commit.
+A simple native Linux remote-desktop client: enter a computer address, connect,
+and get to work. Think VLC for remote desktops. Open source from the first
+commit.
 
-**Early development. Windows desktop, basic input and bidirectional clipboard file copying verified.**
+**Early development. RDP against Windows and VNC against WayVNC are working and
+tested on real hosts.**
 
 We are building our own RDP engine in Rust, interoperating with existing
 Windows and Linux RDP servers. This project contains only a client.
+
+LinRDP is developed first for [Omarchy](https://omarchy.org/) and its
+Wayland/Hyprland desktop. Native windows, compositor shortcut capture, dynamic
+resolution, clipboard integration and packaging are designed and tested with
+that environment as the primary Linux target. Other Wayland desktops and X11
+remain compatibility targets. LinRDP is an independent project and is not an
+official Omarchy component.
 
 ## Direction
 
 - A small native interface with useful defaults and clear errors.
 - Responsive input, crisp text, correct keyboard layouts, and display scaling.
-- Clipboard, audio, saved connections, and straightforward reconnection.
-- Wayland and X11 clients; Windows and Linux remote hosts.
+- Bidirectional text and RDP file clipboard, saved connections, and
+  straightforward reconnection.
+- RDP for Windows/Linux hosts and VNC for WayVNC and compatible RFB servers.
+- Omarchy-first Wayland integration, with broader Wayland and X11 compatibility.
 - Arch Linux packages and Debian/Ubuntu packages when the client is usable.
 
 60 FPS is an initial performance target when the host and network permit it,
@@ -37,7 +48,8 @@ cargo run --release -p linrdp -- connect my-computer.example --user 'MACHINE\tes
 
 Use the same explicit certificate-pin option as the diagnostics when appropriate.
 Use `--size 1920x1080` to select the initial resolution (default 1024×768,
-16-bit color). Dynamic resolution is implemented and enabled by default; use
+32-bit color). LinRDP requests Windows font smoothing and desktop composition
+to preserve ClearType text. Dynamic resolution is implemented and enabled by default; use
 `--dynamic-resolution off` to retain local scaling only. After the initial
 connection, a window resize requests a matching remote resolution through the
 Display Control channel when the server makes it available. Local scaling remains
@@ -47,11 +59,15 @@ shrink changes, restoration to the initial size, keyboard input and Unicode text
 clipboard after resizing. Closing the window
 disconnects without signing out. Basic keyboard, three mouse buttons and vertical
 scrolling are implemented. Input goes to the focused session window.
-The initial keyboard profile is US; Danish layouts and IME are not yet validated.
+Physical key forwarding, shifted keys, Tab, Omarchy/Super shortcuts and Danish
+text input have been exercised against the current test hosts. IME remains
+future compatibility work.
 Wayland text and file copy/paste are enabled by default; use `--clipboard off`
 to disable sharing. See [clipboard behavior and limits](docs/clipboard.md) and
 [desktop scope and validation](docs/desktop.md). Local presentation improvements
 and reproducible CPU benchmarks are described in [performance](docs/performance.md).
+This branch also offers experimental `--graphics h264` (or H.264 in TUI Options).
+Bitmap remains the default; see [H.264 negotiation and validation](docs/h264.md).
 
 ## Development
 
@@ -109,10 +125,12 @@ The codec and transport have synthetic/loopback tests. The
 [first Windows host check](docs/windows-first-probe.md) passed RDP negotiation and
 TLS 1.3 with an explicitly selected certificate pin. System trust rejected the
 issuer; the selected pin was not independently confirmed on Windows.
-Windows authentication, activation and first desktop display have passed. Linux
-server interoperability remains unverified. No installable distro packages have been published.
+Windows authentication, activation, 32-bit bitmap display, dynamic resizing and
+first desktop display have passed. WayVNC interoperability on an Omarchy host
+has passed for TLS, authentication, resizing, keyboard capture, pointer input
+and text clipboard. No installable distro packages have been published.
 
-See [architecture](docs/architecture.md), [roadmap](docs/roadmap.md), and
+See the [changelog](CHANGELOG.md), [architecture](docs/architecture.md), [roadmap](docs/roadmap.md), and
 [contributing](CONTRIBUTING.md). Licensed under [MIT](LICENSE).
 
 ## Experimental NLA diagnostics
@@ -148,8 +166,18 @@ cargo run -p linrdp -- session-probe my-computer.example --user 'MACHINE\tester'
 This performs the same one-attempt login as `login`, then exchanges MCS/GCC
 settings and joins the user and I/O channels over TLS. An explicitly selected
 certificate pin can be used instead of `--ca`. The diagnostic requests a fixed
-1024×768 desktop with 16-bit color and no static virtual channels. It disconnects
+1024×768 desktop with 32-bit color and no static virtual channels. It disconnects
 before client information, licensing or desktop activation; it does not display
 a desktop. This path has passed against the Windows test host.
 
 See [session behavior](docs/sessions.md) and [MCS/GCC scope](docs/mcs.md).
+
+## VNC and WayVNC
+
+[VNC connections](docs/vnc.md) are available through `linrdp vnc` or the
+RDP/VNC selector in the TUI. The client supports VeNCrypt, saved certificate
+trust, ZRLE/Raw/CopyRect graphics, server resizing, keyboard capture, pointer
+input, scrolling and bidirectional text clipboard. The local client cursor
+remains visible; start WayVNC without `--render-cursor` so the host cursor is not
+composited into the framebuffer. Standard RFB does not provide MSTSC-style
+clipboard file transfer; server-specific file extensions remain future work.

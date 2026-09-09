@@ -61,12 +61,11 @@ pub fn run(message: Option<String>, initial: Option<&[String]>) -> Result<Outcom
             Command::Persist => match store.save(&app.profiles) {
                 Ok(()) => {
                     persisted.clone_from(&app.profiles);
-                    app.status = "Saved connections updated.".into();
                 }
                 Err(error) => {
                     app.profiles.clone_from(&persisted);
                     app.selected = app.selected.min(app.profiles.len().saturating_sub(1));
-                    app.editing = None;
+                    app.editing = app.profiles.get(app.selected).map(|_| app.selected);
                     app.status = format!("Could not save; no changes kept: {error}");
                 }
             },
@@ -228,11 +227,13 @@ enum Focus {
     Options,
     Save,
     SaveAs,
-    Edit,
+    New,
     Delete,
     Port,
     Size,
     Dynamic,
+    Graphics,
+    Protocol,
     Clipboard,
     Trust,
     TrustValue,
@@ -269,6 +270,8 @@ struct Form {
     port: String,
     size: String,
     dynamic: bool,
+    h264: bool,
+    vnc: bool,
     clipboard: bool,
     trust: Trust,
     trust_value: String,
@@ -283,6 +286,8 @@ impl Default for Form {
             port: "3389".into(),
             size: "1024x768".into(),
             dynamic: true,
+            h264: false,
+            vnc: false,
             clipboard: true,
             trust: Trust::System,
             trust_value: String::new(),
@@ -306,6 +311,8 @@ impl Form {
             port: profile.port.to_string(),
             size: profile.size.clone().unwrap_or_else(|| "1024x768".into()),
             dynamic: profile.dynamic_resolution,
+            h264: profile.h264,
+            vnc: profile.vnc,
             clipboard: profile.clipboard,
             trust,
             trust_value,
@@ -322,6 +329,8 @@ impl Form {
             port,
             size: (!self.size.trim().is_empty()).then(|| self.size.trim().into()),
             dynamic_resolution: self.dynamic,
+            h264: self.h264,
+            vnc: self.vnc,
             clipboard: self.clipboard,
             ca: (self.trust == Trust::Ca).then(|| self.trust_value.trim().into()),
             fingerprint: (self.trust == Trust::SavedPin)
@@ -363,14 +372,20 @@ enum Command {
 
 impl App {
     fn new(profiles: Vec<Profile>, message: Option<String>, initial: Option<&[String]>) -> Self {
+        let focus = if profiles.is_empty() {
+            Focus::Computer
+        } else {
+            Focus::Saved
+        };
         let mut app = Self {
             profiles,
             selected: 0,
             form: Form::default(),
-            focus: Focus::Computer,
+            focus,
             advanced: false,
-            status: message
-                .unwrap_or_else(|| "Tab moves · Enter chooses · Ctrl+U clears · Esc quits".into()),
+            status: message.unwrap_or_else(|| {
+                "Tab/Arrows move · Enter chooses · Ctrl+S saves · Ctrl+N creates · Esc quits".into()
+            }),
             modal: None,
             editing: None,
         };
@@ -385,6 +400,8 @@ impl App {
                     .size
                     .map_or_else(|| "1024x768".into(), |(w, h)| format!("{w}x{h}")),
                 dynamic: options.dynamic_resolution,
+                h264: options.h264,
+                vnc: options.vnc,
                 clipboard: options.clipboard,
                 trust: if options.ca_file.is_some() {
                     Trust::Ca
@@ -405,33 +422,59 @@ impl App {
     fn focuses(&self) -> &'static [Focus] {
         const BASIC: &[Focus] = &[
             Focus::Saved,
+            Focus::Protocol,
             Focus::Computer,
             Focus::User,
             Focus::Connect,
             Focus::Options,
             Focus::Save,
             Focus::SaveAs,
-            Focus::Edit,
+            Focus::New,
             Focus::Delete,
         ];
         const ADVANCED: &[Focus] = &[
             Focus::Saved,
+            Focus::Protocol,
             Focus::Computer,
             Focus::User,
             Focus::Connect,
             Focus::Options,
             Focus::Save,
             Focus::SaveAs,
-            Focus::Edit,
+            Focus::New,
             Focus::Delete,
             Focus::Port,
             Focus::Size,
             Focus::Dynamic,
             Focus::Clipboard,
+            Focus::Graphics,
             Focus::Trust,
             Focus::TrustValue,
         ];
-        if self.advanced { ADVANCED } else { BASIC }
+        const VNC: &[Focus] = &[
+            Focus::Saved,
+            Focus::Protocol,
+            Focus::Computer,
+            Focus::User,
+            Focus::Connect,
+            Focus::Options,
+            Focus::Save,
+            Focus::SaveAs,
+            Focus::New,
+            Focus::Delete,
+            Focus::Port,
+        ];
+        if self.form.vnc {
+            if self.advanced {
+                VNC
+            } else {
+                &VNC[..VNC.len() - 1]
+            }
+        } else if self.advanced {
+            ADVANCED
+        } else {
+            BASIC
+        }
     }
 
     fn move_focus(&mut self, backwards: bool) {
@@ -461,6 +504,12 @@ impl App {
             }
             return Command::None;
         }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('n') {
+            return self.new_connection();
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
+            return self.save();
+        }
         match key.code {
             KeyCode::Esc => Command::Quit,
             KeyCode::Tab => {
@@ -479,6 +528,30 @@ impl App {
                 if self.selected + 1 < self.profiles.len() {
                     self.selected += 1;
                 }
+                Command::None
+            }
+            KeyCode::Home if self.focus == Focus::Saved => {
+                self.selected = 0;
+                Command::None
+            }
+            KeyCode::End if self.focus == Focus::Saved => {
+                self.selected = self.profiles.len().saturating_sub(1);
+                Command::None
+            }
+            KeyCode::PageUp if self.focus == Focus::Saved => {
+                self.selected = self.selected.saturating_sub(10);
+                Command::None
+            }
+            KeyCode::PageDown if self.focus == Focus::Saved => {
+                self.selected = (self.selected + 10).min(self.profiles.len().saturating_sub(1));
+                Command::None
+            }
+            KeyCode::Up | KeyCode::Left if self.active_text().is_none() => {
+                self.move_focus(true);
+                Command::None
+            }
+            KeyCode::Down | KeyCode::Right if self.active_text().is_none() => {
+                self.move_focus(false);
                 Command::None
             }
             KeyCode::Enter => self.activate(),
@@ -511,25 +584,15 @@ impl App {
             Focus::Saved => {
                 if let Some(profile) = self.profiles.get(self.selected) {
                     self.form = Form::from_profile(profile);
-                    self.editing = None;
-                    self.status = format!("Loaded {}.", profile.name);
-                    self.focus = Focus::Computer;
-                } else {
-                    self.status = "No saved connection selected.".into();
-                }
-                Command::None
-            }
-            Focus::Edit => {
-                if let Some(profile) = self.profiles.get(self.selected) {
-                    self.form = Form::from_profile(profile);
                     self.editing = Some(self.selected);
-                    self.status = format!("Editing {}. Choose Save when finished.", profile.name);
+                    self.status = format!("Editing {}. Update saves changes.", profile.name);
                     self.focus = Focus::Computer;
                 } else {
                     self.status = "No saved connection selected.".into();
                 }
                 Command::None
             }
+            Focus::New => self.new_connection(),
             Focus::Connect => match self.form.profile("Current connection".into()) {
                 Ok(profile) => Command::Connect(profile.arguments()),
                 Err(error) => {
@@ -541,16 +604,7 @@ impl App {
                 self.advanced = !self.advanced;
                 Command::None
             }
-            Focus::Save => {
-                self.modal = Some(Modal::Name {
-                    value: self
-                        .editing
-                        .and_then(|index| self.profiles.get(index))
-                        .map_or_else(String::new, |profile| profile.name.clone()),
-                    replace: self.editing,
-                });
-                Command::None
-            }
+            Focus::Save => self.save(),
             Focus::SaveAs => {
                 self.modal = Some(Modal::Name {
                     value: String::new(),
@@ -570,6 +624,20 @@ impl App {
                 self.form.dynamic = !self.form.dynamic;
                 Command::None
             }
+            Focus::Protocol => {
+                self.form.vnc = !self.form.vnc;
+                if self.form.port == "3389" && self.form.vnc {
+                    self.form.port = "5900".into();
+                } else if self.form.port == "5900" && !self.form.vnc {
+                    self.form.port = "3389".into();
+                }
+                self.status = if self.form.vnc { "VNC: VeNCrypt or classic authentication; local scaling. RDP graphics/clipboard options do not apply." } else { "RDP connection selected." }.into();
+                Command::None
+            }
+            Focus::Graphics => {
+                self.form.h264 = !self.form.h264;
+                Command::None
+            }
             Focus::Clipboard => {
                 self.form.clipboard = !self.form.clipboard;
                 Command::None
@@ -584,13 +652,52 @@ impl App {
         }
     }
 
+    fn new_connection(&mut self) -> Command {
+        self.form = Form::default();
+        self.editing = None;
+        self.advanced = false;
+        self.focus = Focus::Computer;
+        self.status = "New connection. Enter a computer name or address.".into();
+        Command::None
+    }
+
+    fn save(&mut self) -> Command {
+        if let Some(index) = self.editing {
+            let Some(name) = self.profiles.get(index).map(|profile| profile.name.clone()) else {
+                self.editing = None;
+                self.status = "The connection no longer exists. Save it with a new name.".into();
+                return Command::None;
+            };
+            match self.form.profile(name.clone()) {
+                Ok(profile) => {
+                    self.profiles[index] = profile;
+                    self.selected = index;
+                    self.status = format!("Updated {name}.");
+                    Command::Persist
+                }
+                Err(error) => {
+                    self.status = format!("Could not update: {error}");
+                    Command::None
+                }
+            }
+        } else {
+            self.modal = Some(Modal::Name {
+                value: String::new(),
+                replace: None,
+            });
+            Command::None
+        }
+    }
+
     fn modal_key(&mut self, mut modal: Modal, key: KeyEvent) -> Command {
         match (&mut modal, key.code) {
             (_, KeyCode::Esc) => Command::None,
             (Modal::Delete, KeyCode::Char('y') | KeyCode::Char('Y')) => {
+                let name = self.profiles[self.selected].name.clone();
                 self.profiles.remove(self.selected);
                 self.selected = self.selected.min(self.profiles.len().saturating_sub(1));
                 self.editing = None;
+                self.status = format!("Deleted {name}.");
                 Command::Persist
             }
             (Modal::Delete, _) => {
@@ -615,7 +722,8 @@ impl App {
                             self.profiles.push(profile);
                             self.selected = self.profiles.len() - 1;
                         }
-                        self.editing = None;
+                        self.editing = Some(self.selected);
+                        self.status = format!("Saved {}.", self.profiles[self.selected].name);
                         Command::Persist
                     }
                     Err(error) => {
@@ -687,17 +795,36 @@ impl App {
             let (start, end) = self.visible_profiles(height);
             for (row, index) in (start..end).enumerate() {
                 let profile = &self.profiles[index];
+                let label = if self.editing == Some(index) {
+                    format!("> {}", profile.name)
+                } else {
+                    format!("  {}", profile.name)
+                };
                 field(
                     out,
                     3,
                     6 + row as u16,
                     23,
-                    &profile.name,
+                    &label,
                     self.focus == Focus::Saved && self.selected == index,
                 )?;
             }
         }
-        line(out, 29, 4, "Connection", true)?;
+        let connection_heading = self
+            .editing
+            .and_then(|index| self.profiles.get(index))
+            .map_or_else(
+                || "New connection".into(),
+                |profile| format!("Edit {}", profile.name),
+            );
+        line(out, 29, 4, &fit(&connection_heading, 27), true)?;
+        button(
+            out,
+            58,
+            4,
+            if self.form.vnc { "VNC" } else { "RDP" },
+            self.focus == Focus::Protocol,
+        )?;
         labeled(
             out,
             29,
@@ -710,7 +837,11 @@ impl App {
             out,
             29,
             8,
-            "User",
+            if self.form.vnc {
+                "User (optional)"
+            } else {
+                "User"
+            },
             &self.form.user,
             self.focus == Focus::User,
         )?;
@@ -738,7 +869,7 @@ impl App {
             self.focus == Focus::Save,
         )?;
         button(out, 41, 12, "Save as", self.focus == Focus::SaveAs)?;
-        button(out, 55, 12, "Edit", self.focus == Focus::Edit)?;
+        button(out, 55, 12, "New", self.focus == Focus::New)?;
         button(out, 65, 12, "Delete", self.focus == Focus::Delete)?;
         if self.advanced {
             labeled(
@@ -749,47 +880,66 @@ impl App {
                 &self.form.port,
                 self.focus == Focus::Port,
             )?;
-            labeled(
-                out,
-                29,
-                16,
-                "Initial size",
-                &self.form.size,
-                self.focus == Focus::Size,
-            )?;
-            choice(
-                out,
-                29,
-                18,
-                "Dynamic resolution",
-                self.form.dynamic,
-                self.focus == Focus::Dynamic,
-            )?;
-            choice(
-                out,
-                58,
-                18,
-                "Clipboard",
-                self.form.clipboard,
-                self.focus == Focus::Clipboard,
-            )?;
-            labeled(
-                out,
-                29,
-                20,
-                "Trust",
-                self.form.trust.label(),
-                self.focus == Focus::Trust,
-            )?;
-            if self.form.trust == Trust::Ca {
+            if !self.form.vnc {
                 labeled(
                     out,
                     29,
-                    21,
-                    "CA file",
-                    &self.form.trust_value,
-                    self.focus == Focus::TrustValue,
+                    16,
+                    "Initial size",
+                    &self.form.size,
+                    self.focus == Focus::Size,
                 )?;
+                choice(
+                    out,
+                    29,
+                    18,
+                    "Dynamic resolution",
+                    self.form.dynamic,
+                    self.focus == Focus::Dynamic,
+                )?;
+                choice(
+                    out,
+                    58,
+                    18,
+                    "Clipboard",
+                    self.form.clipboard,
+                    self.focus == Focus::Clipboard,
+                )?;
+                labeled(
+                    out,
+                    29,
+                    20,
+                    "Trust",
+                    self.form.trust.label(),
+                    self.focus == Focus::Trust,
+                )?;
+                choice(
+                    out,
+                    58,
+                    20,
+                    "H.264",
+                    self.form.h264,
+                    self.focus == Focus::Graphics,
+                )?;
+                if self.form.trust == Trust::Ca {
+                    labeled(
+                        out,
+                        29,
+                        21,
+                        "CA file",
+                        &self.form.trust_value,
+                        self.focus == Focus::TrustValue,
+                    )?;
+                }
+            } else {
+                line(
+                    out,
+                    29,
+                    16,
+                    "Server resolution; local window scaling",
+                    false,
+                )?;
+                line(out, 29, 18, "VNC password is prompted when required", false)?;
             }
         }
         let status_y = height.saturating_sub(2);
@@ -803,7 +953,7 @@ impl App {
         if let Some(modal) = &self.modal {
             let prompt = match modal {
                 Modal::Name { value, .. } => {
-                    format!("Save as: {value}_   Enter saves · Esc cancels")
+                    format!("Connection name: {value}_   Enter saves · Esc cancels")
                 }
                 Modal::Delete => format!(
                     "Delete {}? Press y to confirm · Esc cancels",
@@ -950,6 +1100,64 @@ mod tests {
         app.form.computer = "host.example".into();
         app.form.user = "tester".into();
     }
+
+    #[test]
+    fn protocol_toggle_switches_default_ports_and_keeps_custom_ports() {
+        let mut app = App::new(Vec::new(), None, None);
+        app.focus = Focus::Protocol;
+        app.key(key(KeyCode::Enter));
+        assert!(app.form.vnc);
+        assert_eq!(app.form.port, "5900");
+        app.key(key(KeyCode::Enter));
+        assert!(!app.form.vnc);
+        assert_eq!(app.form.port, "3389");
+        app.form.port = "5999".into();
+        app.key(key(KeyCode::Enter));
+        assert_eq!(app.form.port, "5999");
+    }
+    #[test]
+    fn vnc_profiles_round_trip_with_optional_user() {
+        let mut app = App::new(Vec::new(), None, None);
+        app.form.computer = "vnc.example".into();
+        app.form.vnc = true;
+        app.form.port = "5901".into();
+        app.form.user = "tester".into();
+        let profile = app.form.profile("VNC desktop".into()).unwrap();
+        assert_eq!(
+            profile.arguments(),
+            vec!["vnc", "vnc.example", "5901", "--user", "tester"]
+        );
+        let json = serde_json::to_string(&profile).unwrap();
+        let saved: Profile = serde_json::from_str(&json).unwrap();
+        assert!(Form::from_profile(&saved).vnc);
+        let args = saved.arguments();
+        let resumed = App::new(Vec::new(), None, Some(&args));
+        assert!(resumed.form.vnc);
+        assert_eq!(resumed.form.port, "5901");
+        assert_eq!(resumed.form.user, "tester");
+        assert!(resumed.focuses().contains(&Focus::User));
+    }
+    #[test]
+    fn graphics_choice_survives_profile_and_connection_resume() {
+        let mut app = App::new(Vec::new(), None, None);
+        complete(&mut app);
+        assert!(!app.form.h264);
+        app.focus = Focus::Graphics;
+        app.key(key(KeyCode::Enter));
+        let saved = app.form.profile("Graphics test".into()).unwrap();
+        let json = serde_json::to_string(&saved).unwrap();
+        let saved: Profile = serde_json::from_str(&json).unwrap();
+        assert!(saved.h264);
+        let args = saved.arguments();
+        assert!(crate::Options::parse(&args).unwrap().h264);
+        let resumed = App::new(Vec::new(), None, Some(&args));
+        assert!(resumed.form.h264);
+        assert!(Form::from_profile(&saved).h264);
+        app.key(key(KeyCode::Enter));
+        let bitmap = app.form.profile("Bitmap test".into()).unwrap();
+        assert!(!serde_json::to_string(&bitmap).unwrap().contains("h264"));
+        assert!(!crate::Options::parse(&bitmap.arguments()).unwrap().h264);
+    }
     #[test]
     fn keyboard_flow_builds_valid_cli_arguments() {
         let mut app = App::new(Vec::new(), None, None);
@@ -1006,7 +1214,7 @@ mod tests {
         }
         assert_eq!(app.key(key(KeyCode::Enter)), Command::Persist);
 
-        app.focus = Focus::Edit;
+        app.focus = Focus::Saved;
         app.key(key(KeyCode::Enter));
         assert_eq!(app.editing, Some(0));
         app.focus = Focus::User;
@@ -1014,7 +1222,6 @@ mod tests {
         app.key(key(KeyCode::Char('x')));
         assert_eq!(app.form.user, "tester x");
         app.focus = Focus::Save;
-        app.key(key(KeyCode::Enter));
         assert_eq!(app.key(key(KeyCode::Enter)), Command::Persist);
         assert_eq!(app.profiles.len(), 1);
         assert_eq!(app.profiles[0].user, "tester x");
@@ -1035,6 +1242,49 @@ mod tests {
         assert_eq!(app.key(key(KeyCode::Enter)), Command::Persist);
         assert_eq!(app.profiles.len(), 2);
         assert_eq!(app.profiles[1].name, "Copy");
+        assert_eq!(app.editing, Some(1));
+    }
+
+    #[test]
+    fn navigation_starts_at_saved_profiles_and_follows_screen_order() {
+        let form = Form {
+            computer: "host.example".into(),
+            user: "tester".into(),
+            ..Form::default()
+        };
+        let profile = form.profile("Work".into()).unwrap();
+        let mut app = App::new(vec![profile], None, None);
+        assert_eq!(app.focus, Focus::Saved);
+        app.key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Protocol);
+        app.key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Computer);
+        app.key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::User);
+        app.key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Connect);
+    }
+
+    #[test]
+    fn save_and_new_shortcuts_update_the_active_profile() {
+        let mut app = App::new(Vec::new(), None, None);
+        complete(&mut app);
+        app.focus = Focus::Save;
+        app.key(key(KeyCode::Enter));
+        for character in "Work".chars() {
+            app.key(key(KeyCode::Char(character)));
+        }
+        assert_eq!(app.key(key(KeyCode::Enter)), Command::Persist);
+        app.form.user = "updated".into();
+        let save = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert_eq!(app.key(save), Command::Persist);
+        assert_eq!(app.profiles[0].user, "updated");
+
+        let new = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL);
+        assert_eq!(app.key(new), Command::None);
+        assert_eq!(app.focus, Focus::Computer);
+        assert!(app.form.computer.is_empty());
+        assert_eq!(app.editing, None);
     }
 
     #[test]
@@ -1070,7 +1320,7 @@ mod tests {
         app.profiles
             .push(app.form.profile("Second".into()).unwrap());
         app.selected = 1;
-        app.focus = Focus::Edit;
+        app.focus = Focus::Saved;
         app.key(key(KeyCode::Enter));
         assert_eq!(app.editing, Some(1));
         app.focus = Focus::Delete;
@@ -1078,7 +1328,7 @@ mod tests {
         assert_eq!(app.key(key(KeyCode::Char('y'))), Command::Persist);
         assert_eq!(app.editing, None);
         app.focus = Focus::Save;
-        app.key(key(KeyCode::Enter));
+        assert!(matches!(app.key(key(KeyCode::Enter)), Command::None));
         assert!(matches!(app.modal, Some(Modal::Name { replace: None, .. })));
     }
 

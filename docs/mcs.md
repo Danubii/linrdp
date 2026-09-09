@@ -6,7 +6,7 @@ TLS stream. Each read/write has a deadline and each TPKT frame is limited by its
 The ordinary `login` command still disconnects after authentication.
 
 The current diagnostic sends MCS Connect Initial containing GCC core, security
-and network data. The fixed profile requests 1024×768, 16-bit color and US keyboard
+and network data. The fixed profile requests 1024×768, 32-bit color and US keyboard
 layout, uses the generic client name LinRDP, and requests no static virtual
 channels. The security data specifies zero legacy encryption methods because
 the transport is already TLS-protected. The selected protocol is included in

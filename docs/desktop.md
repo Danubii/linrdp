@@ -6,11 +6,16 @@ activation, then opens a native desktop display. The password is prompted
 locally after certificate verification. Connection setup still starts from
 the terminal; there is no graphical connection form yet.
 
-The initial profile requests 1024×768 at 16 bits per pixel by default.
+This branch also offers an opt-in [H.264 graphics profile](h264.md). The
+description below covers the default bitmap profile unless stated otherwise.
+
+The initial profile requests 1024×768 and a 32-bit color session by default.
 `--size WIDTHxHEIGHT` selects 200–8192 pixels per dimension, bounded by the
-16-million-pixel budget. Windows has accepted both 1920×1080 and 1280×800. The decoder supports
-raw bottom-up RGB565 bitmaps with row padding and interleaved RLE bitmaps, with
-and without compression headers. The server controls the negotiated dimensions
+16-million-pixel budget. Windows font smoothing and desktop composition are
+enabled explicitly, preserving ClearType subpixel detail that RGB565 discards.
+Windows has accepted both 1920×1080 and 1280×800. The decoder supports raw
+16-, 24-, and 32-bit bottom-up bitmaps with row padding and interleaved RLE
+bitmaps, with and without compression headers. The server controls the negotiated dimensions
 within a bounded 16-million-pixel budget.
 
 Dynamic resolution is implemented for one monitor and defaults to on. Use

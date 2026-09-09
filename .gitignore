@@ -4,3 +4,6 @@
 .env.*
 
 /vendor/minifb/target/
+
+/vendor/vnc-rs/target/
+/vendor/vnc-rs/Cargo.lock

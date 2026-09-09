@@ -108,8 +108,10 @@ impl Session {
         let dir = utf16("LinRDP", 512)?;
         u16le(&mut b, dir.len() as u16);
         b.extend(dir);
-        // UTC timezone, no performance restrictions or reconnection cookie.
-        b.extend([0; 180]);
+        // UTC timezone, no session ID, and Windows visual quality features.
+        b.extend([0; 176]);
+        // TS_PERF_ENABLE_FONT_SMOOTHING | TS_PERF_ENABLE_DESKTOP_COMPOSITION.
+        u32le(&mut b, 0x0000_0180);
         u16le(&mut b, 0);
         self.send(&b).map(zeroize::Zeroizing::new)
     }
@@ -601,6 +603,7 @@ mod tests {
             .client_info("D", "U", "P", "127.0.0.1".parse().unwrap())
             .unwrap();
         assert!(info.windows(4).any(|b| b == [0x40, 0, 0, 0]));
+        assert_eq!(&info[info.len() - 6..info.len() - 2], &[0x80, 1, 0, 0]);
         assert!(
             s.client_info("D", &"a".repeat(512), "P", "::1".parse().unwrap())
                 .is_err()

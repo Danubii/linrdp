@@ -217,6 +217,14 @@ impl Window {
         document.set_title(title);
     }
 
+    pub fn set_keyboard_shortcuts_inhibited(&mut self, _inhibited: bool) -> bool {
+        false
+    }
+
+    pub fn keyboard_shortcuts_inhibited(&self) -> Option<bool> {
+        None
+    }
+
     #[inline]
     pub fn set_rate(&mut self, _rate: Option<Duration>) {}
 
