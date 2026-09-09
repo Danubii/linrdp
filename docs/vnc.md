@@ -2,11 +2,12 @@
 
 Select the RDP/VNC button on the terminal connection screen to choose VNC.
 The default port changes to 5900. Set a custom port in Options and save the
-connection normally. VNC profiles do not require a username and never store a
+connection normally. VNC profiles accept an optional username and never store a
 password. Existing profiles without a protocol setting remain RDP connections.
 
 ```sh
 cargo run --release -p linrdp -- vnc workstation.example 5900
+cargo run --release -p linrdp -- vnc workstation.example 5900 --user alice
 cargo run --release -p linrdp -- tui
 ```
 
@@ -15,22 +16,30 @@ It is separate from RDP negotiation, TLS trust, CredSSP and graphics codecs.
 Choosing RDP for a server that sends an RFB banner produces an explicit message
 suggesting VNC; the client never silently switches protocols or credentials.
 
-This initial adapter uses ordinary VNC over TCP, without transport encryption.
-It supports servers with no authentication or classic VNC password authentication;
-TLS/VeNCrypt and server-specific login schemes are not supported. Use a trusted
-network or an existing secure tunnel. The password is requested locally only when
-needed and is not accepted as a command-line option.
+The adapter supports VeNCrypt 0.2 with X509Plain, X509Vnc, X509None, TLSPlain,
+TLSVnc and TLSNone, plus classic VNC password authentication and None. It prefers
+certificate-authenticated TLS and never retries a weaker method after a TLS or
+authentication failure. Unencrypted VeNCrypt Plain is refused. A password is
+requested locally only when needed and is never accepted on the command line.
+
+System-trusted X.509 certificates require no prompt. For an otherwise valid
+self-signed, unknown-issuer or hostname-mismatched certificate, the client shows
+its SHA-256 fingerprint and validity period and requires interactive approval for
+that connection before sending credentials. Expired and not-yet-valid
+certificates are rejected. Anonymous VeNCrypt TLS encrypts the connection but
+cannot authenticate the server, and the client reports this explicitly.
 
 The server determines the desktop size. Local window resizing scales the image;
 it does not request a new remote desktop size. RDP clipboard/file transfer,
-Display Control, certificate pins and H.264 settings do not apply to VNC.
+Display Control and H.264 settings do not apply to VNC.
 
-Validation passes 221 workspace tests, formatting, Clippy and a release build.
+Validation includes workspace tests, formatting, Clippy and a release build.
 A local RFB 3.8 fixture verified unauthenticated access, the hidden password
 prompt and the exact DES challenge response, Raw images, overlapping CopyRect,
 ZRLE, server resize and clean client disconnect. The TUI protocol selector and
-VNC Options were also exercised interactively. The user's actual VNC host has
-not yet been tested because its address and port were not supplied.
+VNC Options were also exercised interactively. A real VeNCrypt X509Plain server
+with a self-signed certificate completed explicit certificate approval, hidden
+password entry and authentication, then opened and sustained the desktop window.
 
 The vendored vnc-rs 0.5.3 dependency preserves its MIT/Apache licenses. A local
 fix updates refresh-request dimensions after DesktopSize events; the fixture

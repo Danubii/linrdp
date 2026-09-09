@@ -9,6 +9,7 @@ mod trust_store;
 mod tui;
 mod viewer;
 mod vnc;
+mod vnc_transport;
 
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -26,6 +27,7 @@ Usage: linrdp probe <host> [port]
        linrdp login <host> [port] --user <username|DOMAIN\\username> [trust-option]
        linrdp session-probe <host> [port] --user <username> [trust-option]
        linrdp connect <host> [port] --user <username> [trust-option] [--size WIDTHxHEIGHT] [--dynamic-resolution on|off] [--clipboard on|off] [--graphics bitmap|h264]
+       linrdp vnc <host> [port] [--user <username>]
        linrdp tui
        linrdp --help
        linrdp --version
@@ -257,7 +259,7 @@ fn run_with_tls_hook(
     }
     let options = Options::parse(&args)?;
     if options.vnc {
-        return vnc::run(&options.host, options.port);
+        return vnc::run(&options.host, options.port, options.user.as_deref());
     }
     let host = &options.host;
     let port = options.port;
@@ -422,9 +424,16 @@ impl Options {
             return Err("port must be between 1 and 65535".into());
         }
         if options.vnc {
-            if !rest.is_empty() {
+            if rest.len() == 2
+                && rest[0] == "--user"
+                && !rest[1].is_empty()
+                && !rest[1].starts_with('-')
+                && rest[1].len() <= 1024
+            {
+                options.user = Some(rest[1].clone());
+            } else if !rest.is_empty() {
                 return Err(
-                    "VNC accepts a host and optional port; authentication is prompted locally"
+                    "VNC accepts a host, optional port and --user; passwords are prompted locally"
                         .into(),
                 );
             }
@@ -866,7 +875,13 @@ mod vnc_option_tests {
         assert_eq!(options.port, 5900);
         assert_eq!(parse(&["vnc", "::1", "5901"]).unwrap().port, 5901);
         assert!(parse(&["vnc", "localhost", "0"]).is_err());
-        assert!(parse(&["vnc", "localhost", "--user", "tester"]).is_err());
+        assert_eq!(
+            parse(&["vnc", "localhost", "--user", "tester"])
+                .unwrap()
+                .user
+                .as_deref(),
+            Some("tester")
+        );
         assert!(parse(&["vnc", "localhost", "--cert-sha256", "00"]).is_err());
         assert!(
             !parse(&["connect", "localhost", "--user", "tester"])

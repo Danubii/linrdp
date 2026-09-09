@@ -447,6 +447,7 @@ impl App {
             Focus::TrustValue,
         ];
         const VNC: &[Focus] = &[
+            Focus::User,
             Focus::Saved,
             Focus::Computer,
             Focus::Protocol,
@@ -614,7 +615,7 @@ impl App {
                 } else if self.form.port == "5900" && !self.form.vnc {
                     self.form.port = "3389".into();
                 }
-                self.status = if self.form.vnc { "VNC: password authentication; local scaling. RDP graphics/trust/clipboard options do not apply." } else { "RDP connection selected." }.into();
+                self.status = if self.form.vnc { "VNC: VeNCrypt or classic authentication; local scaling. RDP graphics/clipboard options do not apply." } else { "RDP connection selected." }.into();
                 Command::None
             }
             Focus::Graphics => {
@@ -769,7 +770,7 @@ impl App {
             29,
             8,
             if self.form.vnc {
-                "User (not used)"
+                "User (optional)"
             } else {
                 "User"
             },
@@ -1047,13 +1048,17 @@ mod tests {
         assert_eq!(app.form.port, "5999");
     }
     #[test]
-    fn vnc_profiles_round_trip_without_user_or_rdp_flags() {
+    fn vnc_profiles_round_trip_with_optional_user() {
         let mut app = App::new(Vec::new(), None, None);
         app.form.computer = "vnc.example".into();
         app.form.vnc = true;
         app.form.port = "5901".into();
+        app.form.user = "tester".into();
         let profile = app.form.profile("VNC desktop".into()).unwrap();
-        assert_eq!(profile.arguments(), vec!["vnc", "vnc.example", "5901"]);
+        assert_eq!(
+            profile.arguments(),
+            vec!["vnc", "vnc.example", "5901", "--user", "tester"]
+        );
         let json = serde_json::to_string(&profile).unwrap();
         let saved: Profile = serde_json::from_str(&json).unwrap();
         assert!(Form::from_profile(&saved).vnc);
@@ -1061,7 +1066,8 @@ mod tests {
         let resumed = App::new(Vec::new(), None, Some(&args));
         assert!(resumed.form.vnc);
         assert_eq!(resumed.form.port, "5901");
-        assert!(!resumed.focuses().contains(&Focus::User));
+        assert_eq!(resumed.form.user, "tester");
+        assert!(resumed.focuses().contains(&Focus::User));
     }
     #[test]
     fn graphics_choice_survives_profile_and_connection_resume() {

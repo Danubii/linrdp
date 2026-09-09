@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-use vnc::{PixelFormat, Rect, VncConnector, VncEncoding, VncEvent, X11Event};
+use vnc::{Rect, VncEvent, X11Event};
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const MAX_PIXELS: usize = 16 * 1024 * 1024;
 fn invalid(s: &str) -> Box<dyn Error> {
@@ -321,41 +321,13 @@ fn button(b: MouseButton) -> u8 {
         MouseButton::Right => 4,
     }
 }
-/// Connect using plain VNC (None or traditional VNC password authentication).
-pub fn run(host: &str, port: u16) -> Result<()> {
-    eprintln!(
-        "VNC uses an unencrypted connection (no TLS). Authentication supports None or VNC password; the server may offer unauthenticated access."
-    );
+/// Connect using RFB authentication and the server's negotiated transport.
+pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
         .build()?;
-    let client = runtime.block_on(async {
-        let tcp = tokio::time::timeout(
-            Duration::from_secs(15),
-            tokio::net::TcpStream::connect((host, port)),
-        )
-        .await??;
-        tcp.set_nodelay(true)?;
-        let state = VncConnector::new(tcp)
-            .set_auth_method(async {
-                // Synchronous terminal input runs only when the server requests VNC authentication.
-                rpassword::prompt_password("VNC password: ").map_err(vnc::VncError::IoError)
-            })
-            .allow_shared(true)
-            .set_pixel_format(PixelFormat::bgra())
-            .add_encoding(VncEncoding::Zrle)
-            .add_encoding(VncEncoding::CopyRect)
-            .add_encoding(VncEncoding::Raw)
-            .add_encoding(VncEncoding::DesktopSizePseudo)
-            .add_encoding(VncEncoding::LastRectPseudo)
-            .build()?;
-        Ok::<_, Box<dyn Error>>(
-            tokio::time::timeout(Duration::from_secs(30), state.try_start())
-                .await??
-                .finish()?,
-        )
-    })?;
+    let client = runtime.block_on(crate::vnc_transport::connect(host, port, user))?;
     let result = (|| -> Result<()> {
         let mut canvas = Canvas::default();
         let first = runtime.block_on(async {

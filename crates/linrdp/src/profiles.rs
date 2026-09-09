@@ -38,7 +38,11 @@ fn is_false(value: &bool) -> bool {
 impl Profile {
     pub fn arguments(&self) -> Vec<String> {
         if self.vnc {
-            return vec!["vnc".into(), self.computer.clone(), self.port.to_string()];
+            let mut args = vec!["vnc".into(), self.computer.clone(), self.port.to_string()];
+            if !self.user.is_empty() {
+                args.extend(["--user".into(), self.user.clone()]);
+            }
+            return args;
         }
         let mut args = vec!["connect".into(), self.computer.clone()];
         if self.port != 3389 {

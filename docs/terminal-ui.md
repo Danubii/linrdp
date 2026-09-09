@@ -78,4 +78,6 @@ optional user action; the project does not modify desktop configuration or
 install system files automatically. The remote desktop uses an ordinary native
 window whose decorations and window actions are managed by Omarchy.
 
-The RDP/VNC button selects the connection protocol. VNC defaults to port 5900 and does not require a username. Its Options show the port; RDP-only settings are hidden. See [VNC connections](vnc.md).
+The RDP/VNC button selects the connection protocol. VNC defaults to port 5900
+and accepts an optional username for VeNCrypt Plain authentication. Its Options
+show the port; RDP-only settings are hidden. See [VNC connections](vnc.md).

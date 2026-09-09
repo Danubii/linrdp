@@ -61,6 +61,9 @@ features = ["compat"]
 version = "^0.1"
 features = ["log"]
 
+[dependencies.zeroize]
+version = "1"
+
 [dev-dependencies.anyhow]
 version = "^1"
 

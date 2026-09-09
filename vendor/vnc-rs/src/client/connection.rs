@@ -272,6 +272,16 @@ pub struct VncClient {
 }
 
 impl VncClient {
+    /// Start ServerInit and decoding after the caller completes RFB security.
+    /// The caller must authenticate the stream before invoking this constructor.
+    pub async fn from_authenticated_stream<S>(
+        stream: S, shared: bool, pixel_format: Option<PixelFormat>, encodings: Vec<VncEncoding>,
+    ) -> Result<Self, VncError>
+    where S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        Self::new(stream, shared, pixel_format, encodings).await
+    }
+
     pub(super) async fn new<S>(
         stream: S,
         shared: bool,
