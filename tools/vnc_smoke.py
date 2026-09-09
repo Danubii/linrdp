@@ -26,7 +26,7 @@ if '--auth' in sys.argv:
  print('VNC authentication verified',flush=True)
 else:
  c.sendall(b'\x01\x01');assert read(1)==b'\x01'
-c.sendall(bytes(4));assert read(1)==b'\x01' 
+c.sendall(bytes(4));assert read(1)==b'\x01'
 pf=struct.pack('>BBBBHHHBBBxxx',32,24,0,1,255,255,255,16,8,0)
 c.sendall(struct.pack('>HH',64,64)+pf+struct.pack('>I',16)+b'LinRDP VNC smoke')
 requests=0;encodings=[];sizes=set()
