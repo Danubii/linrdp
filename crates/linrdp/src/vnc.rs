@@ -2,13 +2,89 @@
 use minifb::{InputCallback, Key, MouseButton, MouseMode, ScaleMode, Window, WindowOptions};
 use std::{
     collections::BTreeMap,
+    env,
     error::Error,
+    fs,
+    path::PathBuf,
+    process::Command,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use vnc::{Rect, VncEvent, X11Event};
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const MAX_PIXELS: usize = 16 * 1024 * 1024;
+
+struct HyprlandCapture {
+    token: PathBuf,
+    submap: String,
+    installed: bool,
+}
+
+impl HyprlandCapture {
+    fn new() -> Option<Self> {
+        env::var_os("HYPRLAND_INSTANCE_SIGNATURE")?;
+        let runtime = env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)?;
+        let pid = std::process::id();
+        Some(Self {
+            token: runtime.join(format!("linrdp-keyboard-capture-{pid}")),
+            submap: format!("linrdp_capture_{pid}"),
+            installed: false,
+        })
+    }
+
+    fn hyprctl(args: &[&str]) -> bool {
+        Command::new("hyprctl")
+            .args(args)
+            .output()
+            .is_ok_and(|output| output.status.success())
+    }
+
+    fn eval(lua: &str) -> bool {
+        Self::hyprctl(&["eval", lua])
+    }
+
+    fn activate(&mut self) -> bool {
+        let Some(token) = self.token.to_str() else {
+            return false;
+        };
+        if !token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"/_-.".contains(&byte))
+            || fs::write(&self.token, []).is_err()
+        {
+            return false;
+        }
+        self.installed = true;
+        let define = format!(
+            "hl.define_submap(\"{}\", function() hl.bind(\"CTRL + ALT + SHIFT + Escape\", function() hl.dispatch(hl.dsp.exec_cmd(\"rm -f {}\")); hl.dispatch(hl.dsp.submap(\"reset\")) end) end)",
+            self.submap, token
+        );
+        let enter = format!("hl.dispatch(hl.dsp.submap(\"{}\"))", self.submap);
+        let configured = Self::eval(&define) && Self::eval(&enter);
+        if !configured {
+            self.deactivate();
+        }
+        configured
+    }
+
+    fn active(&self) -> bool {
+        self.installed && self.token.exists()
+    }
+
+    fn deactivate(&mut self) {
+        let _ = fs::remove_file(&self.token);
+        if self.installed {
+            Self::eval("hl.dispatch(hl.dsp.submap(\"reset\"))");
+            self.installed = false;
+        }
+    }
+}
+
+impl Drop for HyprlandCapture {
+    fn drop(&mut self) {
+        self.deactivate();
+    }
+}
 fn invalid(s: &str) -> Box<dyn Error> {
     std::io::Error::new(std::io::ErrorKind::InvalidData, s).into()
 }
@@ -405,6 +481,7 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
         let mut capture_requested = false;
         let mut capture_active = false;
         let mut last_capture_toggle = None;
+        let mut hyprland_capture = HyprlandCapture::new();
         while window.is_open() {
             for _ in 0..64 {
                 match runtime.block_on(client.poll_event())? {
@@ -488,6 +565,19 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                 (events, grab_change)
             };
             let callback_toggle = grab_change.is_some();
+            if capture_requested
+                && hyprland_capture
+                    .as_ref()
+                    .is_some_and(|capture| !capture.active())
+            {
+                capture_requested = false;
+                window.set_keyboard_shortcuts_inhibited(false);
+                if let Some(capture) = &mut hyprland_capture {
+                    capture.deactivate();
+                }
+                window.set_title("LinRDP — VNC — Ctrl+Alt+Shift+Esc captures keyboard");
+                eprintln!("VNC: keyboard capture released by Hyprland shortcut.");
+            }
             let toggle_requested = (callback_toggle || capture_toggle_down)
                 && last_capture_toggle
                     .is_none_or(|last: Instant| last.elapsed() >= Duration::from_millis(350));
@@ -495,6 +585,19 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                 last_capture_toggle = Some(Instant::now());
                 let grabbed = !capture_requested;
                 if window.set_keyboard_shortcuts_inhibited(grabbed) {
+                    let hyprland_ready = if let Some(capture) = &mut hyprland_capture {
+                        if grabbed {
+                            capture.activate()
+                        } else {
+                            capture.deactivate();
+                            true
+                        }
+                    } else {
+                        true
+                    };
+                    if !hyprland_ready {
+                        eprintln!("VNC: Hyprland capture submap could not be activated.");
+                    }
                     capture_requested = grabbed;
                     eprintln!(
                         "VNC: keyboard capture {}.",
