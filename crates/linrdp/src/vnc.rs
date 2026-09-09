@@ -323,23 +323,10 @@ fn keysym(k: Key, shift: bool) -> Option<u32> {
         _ => return None,
     })
 }
-fn viewport(size: (usize, usize), canvas: &Canvas) -> (usize, usize, usize, usize) {
-    let (ww, wh) = (size.0.max(1), size.1.max(1));
-    if ww * canvas.height <= wh * canvas.width {
-        let height = (ww * canvas.height / canvas.width).max(1);
-        (0, (wh - height) / 2, ww, height)
-    } else {
-        let width = (wh * canvas.width / canvas.height).max(1);
-        ((ww - width) / 2, 0, width, wh)
-    }
-}
 fn pointer(x: f32, y: f32, size: (usize, usize), canvas: &Canvas) -> (u16, u16) {
-    let (left, top, width, height) = viewport(size, canvas);
     (
-        (((x.max(0.0) as usize).saturating_sub(left) * canvas.width / width).min(canvas.width - 1))
-            as u16,
-        (((y.max(0.0) as usize).saturating_sub(top) * canvas.height / height)
-            .min(canvas.height - 1)) as u16,
+        ((x.max(0.0) as usize * canvas.width / size.0.max(1)).min(canvas.width - 1)) as u16,
+        ((y.max(0.0) as usize * canvas.height / size.1.max(1)).min(canvas.height - 1)) as u16,
     )
 }
 fn scroll_steps(accumulator: &mut f32, delta: f32) -> i8 {
@@ -394,7 +381,7 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
             canvas.height,
             WindowOptions {
                 resize: true,
-                scale_mode: ScaleMode::AspectRatioStretch,
+                scale_mode: ScaleMode::Stretch,
                 ..WindowOptions::default()
             },
         )?;
@@ -701,12 +688,11 @@ mod tests {
         assert_eq!(pointer(1000.0, -2.0, (50, 100), &c), (99, 0));
     }
     #[test]
-    fn aspect_ratio_pointer_excludes_letterbox_bars() {
+    fn pointer_uses_the_complete_client_window() {
         let mut canvas = Canvas::default();
         canvas.resize(1920, 1080).unwrap();
-        assert_eq!(viewport((1000, 1000), &canvas), (0, 219, 1000, 562));
-        assert_eq!(pointer(500.0, 219.0, (1000, 1000), &canvas), (960, 0));
-        assert_eq!(pointer(500.0, 999.0, (1000, 1000), &canvas), (960, 1079));
+        assert_eq!(pointer(500.0, 500.0, (1000, 1000), &canvas), (960, 540));
+        assert_eq!(pointer(999.0, 999.0, (1000, 1000), &canvas), (1918, 1078));
     }
     #[test]
     fn scroll_accumulates_and_caps_each_frame() {

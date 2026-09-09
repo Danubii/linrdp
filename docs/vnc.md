@@ -31,18 +31,18 @@ cannot authenticate the server, and the client reports this explicitly.
 
 When the server advertises ExtendedDesktopSize, stable local window changes send
 a single-screen SetDesktopSize request after a short debounce. Server-rounded
-sizes do not create request feedback. Servers without the extension use local
-linear scaling with the desktop aspect ratio preserved, and pointer coordinates
-exclude the letterbox bars. Wheel deltas are accumulated and rate-limited before
-being translated into VNC button pulses. RDP clipboard/file transfer, Display
-Control and H.264 settings do not apply to VNC.
+sizes do not create request feedback. If the server rejects the request, the
+remote framebuffer is scaled across the complete client window and pointer
+coordinates use that same full-window transform. Wheel deltas are accumulated
+and rate-limited before being translated into VNC button pulses. RDP
+clipboard/file transfer, Display Control and H.264 settings do not apply to VNC.
 
 On Wayland, `Ctrl+Alt+Shift+Enter` captures compositor shortcuts for the VNC
 window so combinations such as Super+key reach the remote desktop. The window
 title confirms capture. `Ctrl+Alt+Shift+Escape` always releases it; both control
 chords are consumed locally and cannot leave remote modifiers held down. If a
 server rejects ExtendedDesktopSize, the client reports the protocol reason and
-uses aspect-preserving bilinear scaling instead.
+uses full-window bilinear scaling instead.
 
 Validation includes workspace tests, formatting, Clippy and a release build.
 A local RFB 3.8 fixture verified unauthenticated access, the hidden password
