@@ -1,5 +1,8 @@
 # VNC connections
 
+WayVNC on Omarchy is the primary VNC interoperability target. LinRDP remains a
+general RFB client and keeps server-specific behavior explicit.
+
 Select the RDP/VNC button on the terminal connection screen to choose VNC.
 The default port changes to 5900. Set a custom port in Options and save the
 connection normally. VNC profiles accept an optional username and never store a
@@ -43,6 +46,11 @@ is synchronized in both directions through the standard RFB ClientCutText and
 ServerCutText messages. RFB does not define the file-copy protocol used by RDP,
 so VNC file selections are ignored. Display Control and H.264 settings do not
 apply to VNC.
+
+Start WayVNC without `--render-cursor` (or `-r`). That server option composites
+the host pointer into captured pixels, where a client cannot separate it from
+the desktop. With the option absent, LinRDP requests cursor pseudo-encoding and
+keeps only its local pointer visible.
 
 On Wayland, `Ctrl+Alt+Shift+Enter` captures compositor shortcuts for the VNC
 window so combinations such as Super+key reach the remote desktop. The window

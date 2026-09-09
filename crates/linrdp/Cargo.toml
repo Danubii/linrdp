@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "A simple Linux RDP client (early development)"
+description = "An Omarchy-first Linux client for RDP and VNC (early development)"
 publish = false
 
 [dependencies]
