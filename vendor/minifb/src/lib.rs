@@ -174,6 +174,11 @@ pub trait InputCallback {
     /// key in the `state` argument, as well as the translated key in the `key` argument.
     /// This includes control characters such as `Key::LeftShift`.
     fn set_key_state(&mut self, _key: Key, _state: bool) {}
+
+    /// Called with the backend's raw hardware keycode when it is available.
+    fn set_key_state_raw(&mut self, key: Key, state: bool, _raw_keycode: u32) {
+        self.set_key_state(key, state);
+    }
 }
 
 /// Window is used to open up a window. It's possible to optionally display a 32-bit buffer when

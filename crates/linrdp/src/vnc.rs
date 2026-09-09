@@ -159,6 +159,7 @@ impl Canvas {
 #[derive(Default)]
 struct Keyboard {
     held: BTreeMap<Key, u32>,
+    raw_keycodes: BTreeMap<Key, u32>,
     events: Vec<X11Event>,
     overflow: bool,
     pending_text: Option<u32>,
@@ -177,7 +178,11 @@ impl Keyboard {
         if self.events.len() >= 1024 {
             self.overflow = true;
         } else if self.extended_key_events
-            && let Some(keycode) = physical_keycode(key)
+            && let Some(keycode) = self
+                .raw_keycodes
+                .get(&key)
+                .copied()
+                .or_else(|| physical_keycode(key))
         {
             self.events.push(X11Event::ExtendedKeyEvent {
                 keysym,
@@ -197,6 +202,9 @@ impl Keyboard {
         }
     }
     fn key(&mut self, key: Key, down: bool) {
+        self.key_raw(key, down, None);
+    }
+    fn key_raw(&mut self, key: Key, down: bool, raw_keycode: Option<u32>) {
         let ctrl =
             self.held.contains_key(&Key::LeftCtrl) || self.held.contains_key(&Key::RightCtrl);
         let alt = self.held.contains_key(&Key::LeftAlt) || self.held.contains_key(&Key::RightAlt);
@@ -214,11 +222,17 @@ impl Keyboard {
             return;
         }
         if down {
+            let raw = raw_keycode.and_then(qnum_from_evdev);
+            if let Some(raw) = raw {
+                self.raw_keycodes.insert(key, raw);
+            }
             // RFB carries modifiers separately. For shortcuts, send the base
             // keysym so Shift+2 remains the physical 2 key rather than '@'.
             // Text input still uses the layout-produced character below.
             let shortcut = ctrl || alt || super_key;
-            if let Some(mut code) = keysym(key, shift && !shortcut) {
+            if let Some(mut code) =
+                keysym(key, shift && !shortcut).or_else(|| raw.and_then(base_keysym_for_qnum))
+            {
                 if code < 0xff00 {
                     if let Some(text) = self.pending_text.take() {
                         code = text;
@@ -236,6 +250,7 @@ impl Keyboard {
             if let Some(code) = self.held.remove(&key) {
                 self.emit_key(key, code, false);
             }
+            self.raw_keycodes.remove(&key);
         }
     }
     fn text(&mut self, scalar: u32) {
@@ -274,6 +289,7 @@ impl Keyboard {
         for (key, code) in keys {
             self.emit_key(key, code, false);
         }
+        self.raw_keycodes.clear();
     }
 }
 struct Callback(Arc<Mutex<Keyboard>>);
@@ -288,6 +304,55 @@ impl InputCallback for Callback {
             k.key(key, state);
         }
     }
+    fn set_key_state_raw(&mut self, key: Key, state: bool, raw_keycode: u32) {
+        if let Ok(mut k) = self.0.lock() {
+            k.key_raw(key, state, Some(raw_keycode));
+        }
+    }
+}
+
+fn qnum_from_evdev(code: u32) -> Option<u32> {
+    Some(match code {
+        96 => 0x9c,
+        97 => 0x9d,
+        98 => 0xb5,
+        100 => 0xb8,
+        102 => 0xc7,
+        103 => 0xc8,
+        104 => 0xc9,
+        105 => 0xcb,
+        106 => 0xcd,
+        107 => 0xcf,
+        108 => 0xd0,
+        109 => 0xd1,
+        110 => 0xd2,
+        111 => 0xd3,
+        119 => 0xc6,
+        125 => 0xdb,
+        126 => 0xdc,
+        127 => 0xdd,
+        1..=95 => code,
+        _ => return None,
+    })
+}
+
+fn base_keysym_for_qnum(code: u32) -> Option<u32> {
+    Some(match code {
+        2..=10 => b'1' as u32 + code - 2,
+        11 => '0' as u32,
+        12 => '-' as u32,
+        13 => '=' as u32,
+        26 => '[' as u32,
+        27 => ']' as u32,
+        39 => ';' as u32,
+        40 => '\'' as u32,
+        41 => '`' as u32,
+        43 => '\\' as u32,
+        51 => ',' as u32,
+        52 => '.' as u32,
+        53 => '/' as u32,
+        _ => return None,
+    })
 }
 
 fn physical_keycode(key: Key) -> Option<u32> {
@@ -949,6 +1014,36 @@ mod tests {
         assert_eq!(
             actual,
             [(0xffeb, 0xdb, true), (0xffe1, 42, true), (50, 3, true)]
+        );
+    }
+    #[test]
+    fn raw_layout_keycode_survives_an_unknown_local_symbol() {
+        let mut keyboard = Keyboard {
+            extended_key_events: true,
+            ..Keyboard::default()
+        };
+        keyboard.key(Key::LeftSuper, true);
+        keyboard.key_raw(Key::Unknown, true, Some(12));
+        keyboard.key_raw(Key::Unknown, false, Some(12));
+        let actual: Vec<_> = keyboard
+            .drain()
+            .iter()
+            .filter_map(|event| match event {
+                X11Event::ExtendedKeyEvent {
+                    keysym,
+                    keycode,
+                    down,
+                } => Some((*keysym, *keycode, *down)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            [
+                (0xffeb, 0xdb, true),
+                ('-' as u32, 12, true),
+                ('-' as u32, 12, false)
+            ]
         );
     }
     #[test]

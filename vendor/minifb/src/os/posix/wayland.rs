@@ -1218,13 +1218,10 @@ impl Window {
                 key::XKB_KEY_KP_Add => Key::NumPadPlus,
                 key::XKB_KEY_KP_Enter => Key::NumPadEnter,
 
-                _ => {
-                    // Ignore other keys
-                    return;
-                }
+                _ => Key::Unknown,
             };
 
-            key_handler.set_key_state(key_i, is_down);
+            key_handler.set_key_state_raw(key_i, is_down, key);
         }
     }
 
