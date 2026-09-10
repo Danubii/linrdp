@@ -1,25 +1,42 @@
 # Arch packaging
 
-`PKGBUILD` packages the tagged x86_64 binary release. Before publishing a tag,
-build the archive in the same CI environment used for the release and replace
-`sha256sums` with the digest of the resulting asset:
+`PKGBUILD` packages the published v0.2.0 x86_64 Linux binary. The checked-in
+checksum matches the GitHub release asset. No Rust compilation is needed.
+
+## Install
+
+With `git` and `base-devel` installed, clone the repository, review the
+`PKGBUILD`, then build and install:
 
 ```sh
-tools/package-release.sh v0.2.0
-sha256sum dist/fjern-v0.2.0-x86_64-linux.tar.gz
+git clone https://github.com/zeq0r/fjern.git
+cd fjern/packaging/arch
+makepkg -si
 ```
 
-The checked-in checksum validates the current local release candidate. It must
-be compared with the uploaded GitHub asset before this PKGBUILD is submitted to
-any package repository.
+The package includes the executable, desktop launcher, SVG icon, license and
+release README. Runtime dependencies are declared in [PKGBUILD](PKGBUILD).
 
-For a pre-release local package check, place the archive in `SRCDEST` and run:
+## Validate
+
+From this directory, with `namcap` installed:
 
 ```sh
-cd packaging/arch
-SRCDEST="$PWD/../../dist" makepkg --clean --cleanbuild --force
-namcap PKGBUILD fjern-*.pkg.tar.zst
+makepkg --clean --cleanbuild --force
+namcap PKGBUILD fjern-0.2.0-1-x86_64.pkg.tar.zst
 ```
 
-The package installs no Omarchy-specific configuration and has no Omarchy
-runtime dependency.
+## Maintain a release
+
+After publishing a release, download its archive and accompanying checksum.
+Verify the archive, update `pkgver` and `sha256sums`, then regenerate `.SRCINFO`
+with `makepkg --printsrcinfo > .SRCINFO`. Build with a fresh source directory to
+exercise the published download URL and checksum.
+
+Use the digest of the **published asset**, not a local build. Archive ordering
+and timestamps are deterministic, but binaries built with different toolchains
+and system libraries can differ. CI's local release candidate checks packaging
+independently; it does not establish the published asset's checksum.
+
+The package does not modify desktop configuration or require a particular
+Linux desktop distribution.
