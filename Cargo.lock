@@ -793,7 +793,7 @@ checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 
 [[package]]
 name = "fjern"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "cap-std",
  "crossterm",
@@ -1477,7 +1477,7 @@ dependencies = [
 
 [[package]]
 name = "linrdp-proto"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "der 0.7.10",
  "ironrdp-core",

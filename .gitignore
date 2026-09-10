@@ -1,5 +1,6 @@
 /target/
 /dist/
+__pycache__/
 /packaging/arch/*.pkg.tar.zst
 /packaging/arch/*.pkg.tar.zst.sig
 /packaging/arch/src/

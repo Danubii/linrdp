@@ -30,8 +30,9 @@ the working paths and remaining gaps are recorded in the
 
 ### Arch Linux · x86_64
 
-The included `PKGBUILD` downloads the published v0.2.0 binary, verifies its
-SHA-256 checksum, and installs the executable, application launcher and icon.
+The included `PKGBUILD` downloads the published v0.2.1 binary, verifies its
+SHA-256 checksum, and installs the executable, application launcher, icon and
+third-party license notices as the `fjern-bin` package. The command is `fjern`.
 With `git` and `base-devel` installed:
 
 ```sh
@@ -46,21 +47,21 @@ See [Arch packaging](packaging/arch/README.md) for details.
 
 ### Linux binary · x86_64
 
-Download and verify the [v0.2.0 release](https://github.com/zeq0r/fjern/releases/tag/v0.2.0):
+Download and verify the [v0.2.1 release](https://github.com/zeq0r/fjern/releases/tag/v0.2.1):
 
 ```sh
-mkdir fjern-v0.2.0-download
-cd fjern-v0.2.0-download
-curl -fLO https://github.com/zeq0r/fjern/releases/download/v0.2.0/fjern-v0.2.0-x86_64-linux.tar.gz
-curl -fLO https://github.com/zeq0r/fjern/releases/download/v0.2.0/fjern-v0.2.0-x86_64-linux.tar.gz.sha256
-sha256sum --check fjern-v0.2.0-x86_64-linux.tar.gz.sha256
+mkdir fjern-v0.2.1-download
+cd fjern-v0.2.1-download
+curl -fLO https://github.com/zeq0r/fjern/releases/download/v0.2.1/fjern-v0.2.1-x86_64-linux.tar.gz
+curl -fLO https://github.com/zeq0r/fjern/releases/download/v0.2.1/fjern-v0.2.1-x86_64-linux.tar.gz.sha256
+sha256sum --check fjern-v0.2.1-x86_64-linux.tar.gz.sha256
 ```
 
 After the checksum reports `OK`, extract and launch:
 
 ```sh
-tar -xzf fjern-v0.2.0-x86_64-linux.tar.gz
-cd fjern-v0.2.0-x86_64-linux
+tar -xzf fjern-v0.2.1-x86_64-linux.tar.gz
+cd fjern-v0.2.1-x86_64-linux
 ./fjern
 ```
 

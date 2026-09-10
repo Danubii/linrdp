@@ -2,7 +2,11 @@
 
 All notable user-facing changes are documented here.
 
-## Unreleased
+## 0.2.1 - 2026-09-10
+
+- Preserve batched Wayland scroll deltas and final touchpad movement.
+- Rename the Arch binary package to `fjern-bin` (the command remains `fjern`).
+- Include dependency and Rust standard-library license notices in releases.
 
 - Batch legacy RDP bitmap bursts before presentation to reduce partial-scroll
   updates; retain immediate completed-frame presentation for GFX.

@@ -4,7 +4,7 @@ resolver = "3"
 exclude = ["vendor/minifb", "vendor/vnc-rs"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/zeq0r/fjern"

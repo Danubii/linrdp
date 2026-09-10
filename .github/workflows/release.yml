@@ -17,6 +17,7 @@ jobs:
       - run: cargo +stable fmt --all --check
       - run: cargo +stable clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo +stable test --workspace --locked
+      - run: python3 tools/test_collect_licenses.py
       - run: cargo +stable build --workspace --release --locked
       - name: Bundle release
         run: tools/package-release.sh "$GITHUB_REF_NAME" x86_64-linux .

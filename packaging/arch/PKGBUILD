@@ -1,21 +1,25 @@
 # Maintainer: Fjern contributors
-pkgname=fjern
-pkgver=0.2.0
+pkgname=fjern-bin
+pkgver=0.2.1
 pkgrel=1
 pkgdesc='Native Linux remote desktop client for RDP and VNC'
 arch=('x86_64')
 url='https://github.com/zeq0r/fjern'
-license=('MIT')
+license=('MIT' 'Apache-2.0' 'BSD-2-Clause' 'BSD-3-Clause' 'ISC' 'Unicode-3.0' 'Unlicense' 'Zlib')
 options=('!debug')
+provides=("fjern=$pkgver")
+conflicts=('fjern')
 depends=('brotli' 'gcc-libs' 'glibc' 'libxkbcommon' 'openssl' 'wayland' 'zlib' 'zstd')
-source=("$pkgname-v$pkgver-x86_64-linux.tar.gz::$url/releases/download/v$pkgver/$pkgname-v$pkgver-x86_64-linux.tar.gz")
-sha256sums=('e8dd0f8d817a14983373bfe62fb49b31d6a22d6188acaf911579df29e5dc0938')
+source=("fjern-v$pkgver-x86_64-linux.tar.gz::$url/releases/download/v$pkgver/fjern-v$pkgver-x86_64-linux.tar.gz")
+# Finalized from the published v0.2.1 asset after the tag build completes.
+sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')
 
 package() {
-  local bundle="$srcdir/$pkgname-v$pkgver-x86_64-linux"
+  local bundle="$srcdir/fjern-v$pkgver-x86_64-linux"
   install -Dm755 "$bundle/fjern" "$pkgdir/usr/bin/fjern"
   install -Dm644 "$bundle/fjern.desktop" "$pkgdir/usr/share/applications/fjern.desktop"
   install -Dm644 "$bundle/fjern.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/fjern.svg"
-  install -Dm644 "$bundle/LICENSE" "$pkgdir/usr/share/licenses/fjern/LICENSE"
+  install -Dm644 "$bundle/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  cp -r "$bundle/third-party-licenses" "$pkgdir/usr/share/licenses/$pkgname/"
   install -Dm644 "$bundle/README.md" "$pkgdir/usr/share/doc/fjern/README.md"
 }
