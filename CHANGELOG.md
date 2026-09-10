@@ -4,6 +4,11 @@ All notable user-facing changes are documented here.
 
 ## Unreleased
 
+- Batch legacy RDP bitmap bursts before presentation to reduce partial-scroll
+  updates; retain immediate completed-frame presentation for GFX.
+- Replace stale queued RDP snapshots with newer eligible images and avoid
+  per-command payload copies in the GFX/H.264 parser.
+
 - Keep RDP reception responsive during slow writes with a bounded, ordered
   ciphertext queue and cancellation of stalled writes on close.
 - Track row damage across recycled RDP snapshots and GFX outputs; cursor-only

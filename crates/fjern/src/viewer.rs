@@ -257,6 +257,7 @@ fn receive(
     let mut staging = linrdp_proto::desktop::Snapshot::default();
     let mut deadline = Instant::now() + Duration::from_secs(30);
     let mut partial_since = None;
+    let mut batch = presentation::Batch::default();
     while !stop.load(Ordering::Relaxed) {
         if let Some(resize) = channels.resize.as_mut() {
             let desired = shared.lock().unwrap().window_size;
@@ -314,14 +315,10 @@ fn receive(
         {
             return Err("incomplete desktop packet timed out".into());
         }
-        presentation::publish(
-            state,
-            shared,
-            &mut staging,
-            &mut updates,
-            !channels.resize.as_ref().is_some_and(|r| r.waiting()),
-        );
-        match stream.read_chunk(connection, &mut bytes) {
+        let before = state.revision;
+        let graphics_before = channels.resize.as_ref().map(|r| r.graphics_revision());
+        let mut idle = false;
+        match stream.read_chunk(connection, &mut bytes, batch.read_budget()) {
             Ok(0) => return Err("server closed the desktop connection".into()),
             Ok(count) => {
                 if pending.is_empty() {
@@ -402,8 +399,29 @@ fn receive(
                     io::ErrorKind::TimedOut
                         | io::ErrorKind::WouldBlock
                         | io::ErrorKind::Interrupted
-                ) => {}
+                ) =>
+            {
+                idle = error.kind() != io::ErrorKind::Interrupted;
+            }
             Err(error) => return Err(error.into()),
+        }
+        if state.revision != before {
+            let complete =
+                graphics_before != channels.resize.as_ref().map(|r| r.graphics_revision());
+            batch.changed(Instant::now(), complete);
+        }
+        let partial = !pending.is_empty() || state.bitmap_fragment_pending();
+        let slot_pending = shared.lock().unwrap().pending;
+        if batch.due(Instant::now(), idle, partial, slot_pending)
+            && presentation::publish(
+                state,
+                shared,
+                &mut staging,
+                &mut updates,
+                !channels.resize.as_ref().is_some_and(|r| r.waiting()),
+            )
+        {
+            batch.published();
         }
     }
     Ok(())

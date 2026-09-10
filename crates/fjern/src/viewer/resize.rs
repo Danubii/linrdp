@@ -40,6 +40,9 @@ impl Drop for Resize {
     }
 }
 impl Resize {
+    pub(super) fn graphics_revision(&self) -> u64 {
+        self.graphics_revision
+    }
     pub fn new(user: u16, channel: u16) -> Self {
         Self {
             user,

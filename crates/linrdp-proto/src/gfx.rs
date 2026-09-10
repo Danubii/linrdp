@@ -161,25 +161,34 @@ impl Gfx {
         }
         self.pending.extend(decoded);
         let mut replies = Vec::new();
-        let mut offset = 0;
-        while self.pending.len() - offset >= 8 {
-            let mut c = Cursor(&self.pending[offset..]);
-            let cmd = c.u16()?;
-            if c.u16()? != 0 {
-                return Err(bad("nonzero graphics header flags"));
+        // Own the reassembly storage locally while mutating codec state. This
+        // lets even large AVC/progressive command bodies be borrowed, not cloned.
+        let mut pending = std::mem::take(&mut self.pending);
+        let consumed = (|| -> Result<usize> {
+            let mut offset = 0;
+            while pending.len() - offset >= 8 {
+                let mut c = Cursor(&pending[offset..]);
+                let cmd = c.u16()?;
+                if c.u16()? != 0 {
+                    return Err(bad("nonzero graphics header flags"));
+                }
+                let len = c.u32()? as usize;
+                if !(8..=MAX_MESSAGE).contains(&len) {
+                    return Err(bad("invalid graphics PDU length"));
+                }
+                if pending.len() - offset < len {
+                    break;
+                }
+                self.process(cmd, &pending[offset + 8..offset + len], &mut replies)?;
+                offset += len;
             }
-            let len = c.u32()? as usize;
-            if !(8..=MAX_MESSAGE).contains(&len) {
-                return Err(bad("invalid graphics PDU length"));
-            }
-            if self.pending.len() - offset < len {
-                break;
-            }
-            let body = self.pending[offset + 8..offset + len].to_vec();
-            self.process(cmd, &body, &mut replies)?;
-            offset += len;
+            Ok(offset)
+        })();
+        if let Ok(offset) = consumed {
+            pending.drain(..offset);
         }
-        self.pending.drain(..offset);
+        self.pending = pending;
+        consumed?;
         Ok(replies)
     }
     fn surface(&self, id: u16) -> Result<&Surface> {
@@ -1002,6 +1011,26 @@ mod tests {
         assert!(send(&mut g, 9, &[2, 0, 255, 255, 255, 255, 0x20]).is_err());
         assert!(send(&mut g, 4, &[1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 5, 0, 4, 0]).is_err());
         assert!(send(&mut g, 0x7777, &[]).is_err());
+    }
+    #[test]
+    fn borrowed_command_storage_survives_partial_input_and_errors() {
+        let mut g = setup();
+        let packet = pdu(0xb, &[0, 0, 0, 0, 42, 0, 0, 0]);
+        g.receive(&ironrdp_graphics::zgfx::wrap_uncompressed(&packet[..11]))
+            .unwrap();
+        assert_eq!(g.pending, &packet[..11]);
+        g.receive(&ironrdp_graphics::zgfx::wrap_uncompressed(&packet[11..]))
+            .unwrap();
+        assert!(g.pending.is_empty());
+        assert_eq!(g.frame, Some(42));
+        let invalid = pdu(0x7777, &[1, 2, 3]);
+        assert!(
+            g.receive(&ironrdp_graphics::zgfx::wrap_uncompressed(&invalid))
+                .is_err()
+        );
+        assert_eq!(g.pending, invalid);
+        assert_eq!(g.frames, 0);
+        assert!(g.output.is_none());
     }
     #[test]
     fn cache_copy_survives_source_changes() {

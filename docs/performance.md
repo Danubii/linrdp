@@ -140,13 +140,24 @@ reduce network bandwidth or change the server's encoding rate.
 ## Snapshot scheduling
 
 The decoder applies every protocol update to its authoritative framebuffer.
-When the UI has consumed the pending snapshot, the receiver composites the
+When a batch is ready, the receiver composites the
 changed pixel rows and cursor into a reusable staging buffer outside the display
 mutex. Buffer ownership is swapped through one pending slot into the UI.
-While that slot is occupied, incoming deltas continue to update the decoder;
-they do not trigger redundant full-screen copies. The next snapshot includes
-all accumulated changes. This is bounded coalescing, not packet dropping or
-frame interpolation. One already queued snapshot may precede newer updates.
+A newer eligible snapshot atomically replaces an unconsumed one, so a slow UI
+does not first have to display the old queued image. Incoming protocol updates
+are always decoded; only obsolete presentation snapshots are superseded.
+
+Legacy bitmap updates do not provide a negotiated display-frame boundary.
+Presentation waits for a 2 ms quiet gap without a partial packet/fast-path
+fragment, or a 16 ms batch age under continuous traffic. Reads use a 2 ms budget
+while batching instead of the usual idle 8 ms. Input and channel processing
+continue between reads. The age limit is checked after decoding, not a hard
+real-time deadline for native codec work. This reduces partial-scroll snapshots
+but cannot guarantee atomic server frames on the legacy bitmap profile.
+
+GFX EndFrame remains authoritative: completed frames bypass bitmap debounce.
+In both modes, if an image is still pending, replacements are coalesced over
+at least 8 ms to bound speculative snapshot work. No incomplete GFX frame is exposed.
 
 Every snapshot retains the row generations actually stored in its allocation.
 The generations travel with the pixels through the producer, pending slot and
@@ -166,6 +177,9 @@ are converted from YUV directly into the persistent surface, after validating
 all region bounds against both surface and decoded picture. This removes the
 temporary full-frame RGB allocation and subsequent region copy. Conversion
 retains the existing full-range BT.709 integer equations and padded strides.
+GFX command bodies now borrow the reassembly buffer during processing rather
+than allocating and copying every complete AVC/progressive command payload.
+Fragmentation, message limits and error paths retain the same validation.
 
 At the negotiated native resolution, the UI sends its pixel buffer directly to
 the window backend. Scaling uses one horizontal lookup table per frame and

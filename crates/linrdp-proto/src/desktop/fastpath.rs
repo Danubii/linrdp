@@ -30,6 +30,9 @@ pub fn frame_length(prefix: &[u8]) -> Result<Option<usize>> {
 }
 
 impl Session {
+    pub fn bitmap_fragment_pending(&self) -> bool {
+        self.fragment.is_some()
+    }
     pub fn receive_fastpath(&mut self, packet: &[u8]) -> Result<()> {
         if self.phase != Phase::Active {
             return Err(bad("fast-path output before activation"));

@@ -103,9 +103,10 @@ impl Transport {
         &mut self,
         connection: &mut rustls::ClientConnection,
         bytes: &mut [u8],
+        budget: Duration,
     ) -> io::Result<usize> {
         self.check()?;
-        self.read_deadline = Some(Instant::now() + Duration::from_millis(8));
+        self.read_deadline = Some(Instant::now() + budget);
         rustls::Stream::new(connection, self).read(bytes)
     }
 }
@@ -213,7 +214,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         while reply.len() < 11 {
             let mut bytes = [0; 11];
-            match transport.read_chunk(&mut connection, &mut bytes) {
+            match transport.read_chunk(&mut connection, &mut bytes, Duration::from_millis(8)) {
                 Ok(0) => panic!("early EOF"),
                 Ok(n) => reply.extend_from_slice(&bytes[..n]),
                 Err(e)
