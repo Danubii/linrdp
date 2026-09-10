@@ -699,6 +699,9 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                             VncEvent::DesktopResizeRejected { reason, status } => eprintln!(
                                 "VNC: server rejected desktop resize (reason {reason}, status {status})."
                             ),
+                            VncEvent::DesktopResizePending { reason } => eprintln!(
+                                "VNC: server forwarded desktop resize (reason {reason}); waiting for the new layout."
+                            ),
                             VncEvent::Text(text) => {
                                 clipboard_generation = clipboard_generation.wrapping_add(1);
                                 let id = clipboard_generation;

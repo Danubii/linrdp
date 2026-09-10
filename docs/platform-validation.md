@@ -47,7 +47,7 @@ fixture:
 | Server resize | Pass | Client refreshed at the fixture's new 80×48 framebuffer size |
 | Window close | Partial | Client and fixture exit successfully, but vendored minifb logs attached Wayland-proxy warnings during teardown |
 | Launcher installation | Blocked | Package is valid, but system installation requires an interactive administrator password |
-| Real WayVNC host | Pass | TLS pin, password, hardware key events, native presentation and local scaling verified |
+| Real WayVNC host | Pass | TLS pin, password, hardware key events, native presentation, local scaling and scaled input mapping verified |
 | Real Windows RDP host | Pass | TLS 1.3, pinned identity, CredSSP, early authorization, activation and first bitmap verified |
 | Keyboard, pointer and clipboard | Partial | Channels/capabilities negotiated, but end-to-end content and input effects were not manually observed in this run |
 
@@ -68,11 +68,11 @@ excluded from this report.
 - The server advertised hardware key events and the RFB desktop-resize extension.
 - Fjern mapped a native, tiled Wayland window and entered/exited compositor
   fullscreen at 1920×1080.
-- A repeat connection and fullscreen transition worked normally. The server
-  rejected RFB `SetDesktopSize` requests with reason 1/status 4, including a
-  1920×1080 request; Fjern remained connected and continued presenting through
-  local scaling. This is recorded as unsupported server-side resolution change
-  on this host, not as a WayVNC connection or scaling failure.
+- Repeat connections and fullscreen transitions worked normally. RFB status 4
+  means that WayVNC forwarded each `SetDesktopSize` request to the desktop for
+  asynchronous handling; it is not a rejection. Fjern now reports that state
+  accurately while continuing local scaling. Pointer coordinates remain mapped
+  to the remote framebuffer after scaling.
 - Closing the compositor window ended the client with exit status 0. The
   vendored minifb Wayland-proxy teardown warnings remain.
 

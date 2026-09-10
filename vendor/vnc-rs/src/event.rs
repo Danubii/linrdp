@@ -61,6 +61,9 @@ pub enum VncEvent {
     DesktopResizeAvailable(DesktopScreen),
     /// The server rejected a client-requested desktop size.
     DesktopResizeRejected { reason: u16, status: u16 },
+    /// The server forwarded a client-requested size to the desktop and may
+    /// report the completed layout asynchronously.
+    DesktopResizePending { reason: u16 },
     /// The server accepted QEMU Extended Key Event negotiation.
     ExtendedKeyEventAvailable,
     /// If the connector doesn't call `set_pixel_format` method

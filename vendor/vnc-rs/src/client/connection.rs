@@ -31,6 +31,16 @@ struct ImageRect {
     encoding: VncEncoding,
 }
 
+fn desktop_resize_result(reason: u16, status: u16) -> Option<VncEvent> {
+    match status {
+        0 => None,
+        // RFB ExtendedDesktopSize status 4 means "request forwarded", not
+        // rejection. A later server-side layout event may complete it.
+        4 => Some(VncEvent::DesktopResizePending { reason }),
+        _ => Some(VncEvent::DesktopResizeRejected { reason, status }),
+    }
+}
+
 impl From<[u8; 12]> for ImageRect {
     fn from(buf: [u8; 12]) -> Self {
         Self {
@@ -511,12 +521,10 @@ where
                                     ))
                                     .await?;
                                 }
-                            } else {
-                                output_func(VncEvent::DesktopResizeRejected {
-                                    reason: rect.rect.x,
-                                    status: rect.rect.y,
-                                })
-                                .await?;
+                            } else if let Some(event) =
+                                desktop_resize_result(rect.rect.x, rect.rect.y)
+                            {
+                                output_func(event).await?;
                             }
                         }
                         VncEncoding::LastRectPseudo => {
@@ -535,6 +543,27 @@ where
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod fjern_resize_tests {
+    use super::*;
+
+    #[test]
+    fn forwarded_resize_is_pending_not_rejected() {
+        assert!(matches!(
+            desktop_resize_result(1, 4),
+            Some(VncEvent::DesktopResizePending { reason: 1 })
+        ));
+        assert!(matches!(
+            desktop_resize_result(1, 3),
+            Some(VncEvent::DesktopResizeRejected {
+                reason: 1,
+                status: 3
+            })
+        ));
+        assert!(desktop_resize_result(1, 0).is_none());
+    }
 }
 
 async fn async_connection_process_loop<S>(

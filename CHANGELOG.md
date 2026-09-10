@@ -16,6 +16,9 @@ pins are never merged or replaced automatically.
 - Added deterministic Linux release bundles and an Arch Linux binary package.
 - Added clean Arch CI coverage for build, tests, `makepkg` and `namcap`.
 - Corrected the VNC smoke fixture's server-name length after the rebrand.
+- Correctly treats RFB ExtendedDesktopSize status 4 as an asynchronously
+  forwarded resize request rather than a rejection; local scaling and input
+  mapping continue while waiting for a server layout update.
 
 ## 0.1.0 - 2026-09-09
 
