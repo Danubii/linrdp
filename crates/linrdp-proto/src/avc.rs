@@ -51,20 +51,67 @@ impl DecoderPool {
         height: usize,
         data: &[u8],
     ) -> Result<Option<Frame>> {
-        let result = self.prepare_and_decode(surface_id, width, height, data);
+        self.decode_with(surface_id, width, height, data, |yuv| {
+            let (width, height) = yuv.dimensions();
+            Ok(Frame {
+                width,
+                height,
+                pixels: rdp_rgb(yuv),
+            })
+        })
+    }
+
+    /// Decode all reference state, but convert only advertised regions directly
+    /// into the persistent surface. Coordinates are left/top/right/bottom.
+    pub fn decode_into(
+        &mut self,
+        surface_id: u16,
+        width: usize,
+        height: usize,
+        data: &[u8],
+        target: &mut [u32],
+        regions: &[(usize, usize, usize, usize)],
+    ) -> Result<bool> {
+        self.decode_with(surface_id, width, height, data, |yuv| {
+            let (w, h) = yuv.dimensions();
+            if target.len() != width * height
+                || regions.iter().any(|&(l, t, r, b)| {
+                    l >= r || t >= b || r > width || b > height || r > w || b > h
+                })
+            {
+                return Err(bad("AVC region outside decoded surface"));
+            }
+            for &region in regions {
+                convert_region(yuv, target, width, region);
+            }
+            Ok(())
+        })
+        .map(|frame| frame.is_some())
+    }
+
+    fn decode_with<T>(
+        &mut self,
+        surface_id: u16,
+        width: usize,
+        height: usize,
+        data: &[u8],
+        consume: impl FnOnce(&openh264::decoder::DecodedYUV<'_>) -> Result<T>,
+    ) -> Result<Option<T>> {
+        let result = self.prepare_and_decode(surface_id, width, height, data, consume);
         if result.is_err() {
             // Preflight errors also invalidate reference state.
             self.remove(surface_id);
         }
         result
     }
-    fn prepare_and_decode(
+    fn prepare_and_decode<T>(
         &mut self,
         surface_id: u16,
         width: usize,
         height: usize,
         data: &[u8],
-    ) -> Result<Option<Frame>> {
+        consume: impl FnOnce(&openh264::decoder::DecodedYUV<'_>) -> Result<T>,
+    ) -> Result<Option<T>> {
         if width == 0 || height == 0 || width > MAX_DIMENSION || height > MAX_DIMENSION {
             return Err(bad("invalid AVC surface dimensions"));
         }
@@ -103,16 +150,6 @@ impl DecoderPool {
             self.decoders.insert(surface_id, decoder);
             self.surface_bounds.insert(surface_id, (width, height));
         }
-        let frame = self.decode_inner(surface_id, data)?;
-        if frame.as_ref().is_some_and(|f| {
-            f.width > width.div_ceil(16) * 16 || f.height > height.div_ceil(32) * 32
-        }) {
-            return Err(bad("decoded AVC dimensions exceed the surface"));
-        }
-        Ok(frame)
-    }
-
-    fn decode_inner(&mut self, surface_id: u16, data: &[u8]) -> Result<Option<Frame>> {
         let decoder = self.decoders.get_mut(&surface_id).unwrap();
         let Some(yuv) = decoder
             .decode(data)
@@ -120,14 +157,12 @@ impl DecoderPool {
         else {
             return Ok(None);
         };
-        let (width, height) = yuv.dimensions();
-        dimensions(width, height)?;
-        let pixels = rdp_rgb(&yuv);
-        Ok(Some(Frame {
-            width,
-            height,
-            pixels,
-        }))
+        let (w, h) = yuv.dimensions();
+        dimensions(w, h)?;
+        if w > width.div_ceil(16) * 16 || h > height.div_ceil(32) * 32 {
+            return Err(bad("decoded AVC dimensions exceed the surface"));
+        }
+        consume(&yuv).map(Some)
     }
 }
 
@@ -135,24 +170,33 @@ impl DecoderPool {
 /// display defaults. OpenH264's write_rgb8 instead uses limited-range BT.601.
 fn rdp_rgb(yuv: &impl YUVSource) -> Vec<u32> {
     let (width, height) = yuv.dimensions();
-    let (ys, us, vs) = yuv.strides();
     let mut output = vec![0; width * height];
-    for row in 0..height {
-        let y = &yuv.y()[row * ys..row * ys + width];
+    convert_region(yuv, &mut output, width, (0, 0, width, height));
+    output
+}
+
+fn convert_region(
+    yuv: &impl YUVSource,
+    output: &mut [u32],
+    stride: usize,
+    (left, top, right, bottom): (usize, usize, usize, usize),
+) {
+    let (ys, us, vs) = yuv.strides();
+    for row in top..bottom {
+        let y = &yuv.y()[row * ys..row * ys + right];
         let u = &yuv.u()[row / 2 * us..];
         let v = &yuv.v()[row / 2 * vs..];
-        let target = &mut output[row * width..(row + 1) * width];
-        for x in 0..width {
+        let target = &mut output[row * stride..(row + 1) * stride];
+        for x in left..right {
             let luma = i32::from(y[x]) << 8;
             let cb = i32::from(u[x / 2]) - 128;
             let cr = i32::from(v[x / 2]) - 128;
-            let red = ((luma + 403 * cr) >> 8).clamp(0, 255) as u32;
-            let green = ((luma - 48 * cb - 120 * cr) >> 8).clamp(0, 255) as u32;
-            let blue = ((luma + 475 * cb) >> 8).clamp(0, 255) as u32;
-            target[x] = (red << 16) | (green << 8) | blue;
+            let (red, green, blue) = (403 * cr, -48 * cb - 120 * cr, 475 * cb);
+            target[x] = ((((luma + red) >> 8).clamp(0, 255) as u32) << 16)
+                | ((((luma + green) >> 8).clamp(0, 255) as u32) << 8)
+                | (((luma + blue) >> 8).clamp(0, 255) as u32);
         }
     }
-    output
 }
 
 fn bad(message: &str) -> Error {
@@ -387,6 +431,48 @@ mod tests {
     const IDR: &[u8] = include_bytes!("../tests/fixtures/avc/red-idr.h264");
     const P: &[u8] = include_bytes!("../tests/fixtures/avc/red-p.h264");
 
+    #[test]
+    fn direct_regions_match_full_decode_and_preserve_untouched_pixels() {
+        let mut direct = DecoderPool::new();
+        let mut reference = DecoderPool::new();
+        let mut target = vec![0xabcdef; 32 * 32];
+        let allocation = target.as_ptr();
+        for (packet, regions) in [
+            (IDR, vec![(1, 3, 17, 19), (20, 20, 32, 32)]),
+            (P, vec![(0, 0, 32, 32)]),
+        ] {
+            let full = reference
+                .decode_bounded(1, 32, 32, packet)
+                .unwrap()
+                .unwrap();
+            let mut expected = target.clone();
+            for &(l, t, r, b) in &regions {
+                for y in t..b {
+                    expected[y * 32 + l..y * 32 + r]
+                        .copy_from_slice(&full.pixels[y * 32 + l..y * 32 + r]);
+                }
+            }
+            assert!(
+                direct
+                    .decode_into(1, 32, 32, packet, &mut target, &regions)
+                    .unwrap()
+            );
+            assert_eq!(target, expected);
+            assert_eq!(target.as_ptr(), allocation);
+        }
+        let before = target.clone();
+        assert!(
+            direct
+                .decode_into(1, 32, 32, P, &mut target, &[(0, 0, 1, 1), (0, 0, 33, 1)])
+                .is_err()
+        );
+        assert_eq!(
+            target, before,
+            "validate all regions before writing any pixels"
+        );
+        assert!(direct.decoders.is_empty());
+    }
+
     fn red(frame: Frame) {
         assert_eq!((frame.width, frame.height), (32, 32));
         assert_eq!(frame.pixels.len(), 1024);
@@ -527,6 +613,88 @@ mod tests {
 mod color_tests {
     use super::*;
     use openh264::formats::YUVSlices;
+    #[test]
+    #[ignore = "release CPU benchmark"]
+    fn benchmark_avc_region_conversion() {
+        let (w, h) = (1920, 1080);
+        let ys: Vec<_> = (0..w * h).map(|n| (n * 19) as u8).collect();
+        let us: Vec<_> = (0..w * h / 4).map(|n| (n * 37) as u8).collect();
+        let vs: Vec<_> = (0..w * h / 4).map(|n| (n * 53) as u8).collect();
+        let image = YUVSlices::new((&ys, &us, &vs), (w, h), (w, w / 2, w / 2));
+        for region in [(0, 0, w, h), (17, 19, 81, 83)] {
+            let mut out = vec![0; w * h];
+            let mut samples = [Vec::new(), Vec::new()];
+            for batch in 0..6 {
+                for kind in if batch % 2 == 0 { [0, 1] } else { [1, 0] } {
+                    let start = std::time::Instant::now();
+                    for _ in 0..20 {
+                        if kind == 0 {
+                            // Original full-frame scalar conversion plus region copy.
+                            let image = std::hint::black_box(&image);
+                            let mut full = vec![0; w * h];
+                            for y in 0..h {
+                                for x in 0..w {
+                                    let l = i32::from(image.y()[y * w + x]) << 8;
+                                    let u = i32::from(image.u()[y / 2 * (w / 2) + x / 2]) - 128;
+                                    let v = i32::from(image.v()[y / 2 * (w / 2) + x / 2]) - 128;
+                                    full[y * w + x] = (((l + 403 * v) >> 8).clamp(0, 255) as u32)
+                                        << 16
+                                        | (((l - 48 * u - 120 * v) >> 8).clamp(0, 255) as u32) << 8
+                                        | ((l + 475 * u) >> 8).clamp(0, 255) as u32;
+                                }
+                            }
+                            for y in region.1..region.3 {
+                                out[y * w + region.0..y * w + region.2]
+                                    .copy_from_slice(&full[y * w + region.0..y * w + region.2]);
+                            }
+                        } else {
+                            convert_region(std::hint::black_box(&image), &mut out, w, region);
+                        }
+                        std::hint::black_box(&out);
+                    }
+                    samples[kind].push(start.elapsed().as_secs_f64() * 50.0);
+                }
+            }
+            for times in &mut samples {
+                times.sort_by(f64::total_cmp);
+            }
+            eprintln!(
+                "AVC region {}x{}: full scalar/copy {:.3} ms, direct {:.3} ms",
+                region.2 - region.0,
+                region.3 - region.1,
+                samples[0][3],
+                samples[1][3]
+            );
+        }
+    }
+    #[test]
+    fn regional_conversion_matches_scalar_for_odd_edges_and_padded_strides() {
+        let ys: Vec<_> = (0..10 * 8).map(|n| (n * 19) as u8).collect();
+        let us: Vec<_> = (0..6 * 4).map(|n| (n * 37) as u8).collect();
+        let vs: Vec<_> = (0..7 * 4).map(|n| (n * 53) as u8).collect();
+        let image = YUVSlices::new((&ys, &us, &vs), (8, 8), (10, 6, 7));
+        for left in 0..8 {
+            for right in left + 1..=8 {
+                let mut output = vec![0xabcdef; 11 * 8];
+                convert_region(&image, &mut output, 11, (left, 1, right, 7));
+                for y in 0..8 {
+                    for x in 0..11 {
+                        let expected = if (1..7).contains(&y) && (left..right).contains(&x) {
+                            let l = i32::from(ys[y * 10 + x]) << 8;
+                            let u = i32::from(us[y / 2 * 6 + x / 2]) - 128;
+                            let v = i32::from(vs[y / 2 * 7 + x / 2]) - 128;
+                            (((l + 403 * v) >> 8).clamp(0, 255) as u32) << 16
+                                | (((l - 48 * u - 120 * v) >> 8).clamp(0, 255) as u32) << 8
+                                | ((l + 475 * u) >> 8).clamp(0, 255) as u32
+                        } else {
+                            0xabcdef
+                        };
+                        assert_eq!(output[y * 11 + x], expected);
+                    }
+                }
+            }
+        }
+    }
     #[test]
     fn rdp_full_range_709_preserves_black_white_and_normative_colors() {
         for (y, u, v, expected) in [

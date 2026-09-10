@@ -109,17 +109,16 @@ impl Resize {
             }
             if graphics.revision != self.graphics_revision {
                 if let Some(frame) = &mut graphics.output {
-                    desktop.framebuffer.width = frame.width;
-                    desktop.framebuffer.height = frame.height;
-                    // GFX reconstructs the next completed output from its surfaces.
-                    // Recycle the previous viewer buffer instead of copying pixels.
-                    std::mem::swap(&mut desktop.framebuffer.pixels, &mut frame.pixels);
-                    desktop.framebuffer.updates = desktop.framebuffer.updates.saturating_add(1);
+                    // Pixels and their damage generations must travel together.
+                    std::mem::swap(&mut desktop.framebuffer, frame);
                     desktop.revision = desktop.revision.saturating_add(1);
                     if self.graphics_revision == 0 {
                         println!(
                             "First RDP graphics frame decoded: {}x{}; codec {:?}; AVC negotiated: {}.",
-                            frame.width, frame.height, graphics.last_codec, graphics.avc_enabled
+                            desktop.framebuffer.width,
+                            desktop.framebuffer.height,
+                            graphics.last_codec,
+                            graphics.avc_enabled
                         );
                     }
                 }

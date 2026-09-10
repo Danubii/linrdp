@@ -101,6 +101,14 @@ impl Pointer {
             }
         }
     }
+
+    pub fn rows(&self, height: usize) -> Option<std::ops::Range<usize>> {
+        let (index, (_, y)) = (self.active?, self.position?);
+        let image = self.cache[index].as_ref()?;
+        let top = i32::from(y) - image.hot_y as i32;
+        let bottom = (top + image.height as i32).clamp(0, height as i32) as usize;
+        Some(top.clamp(0, height as i32) as usize..bottom)
+    }
 }
 
 #[cfg(test)]

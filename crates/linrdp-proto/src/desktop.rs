@@ -7,7 +7,67 @@ mod capabilities;
 mod fastpath;
 mod input;
 mod pointer;
-pub use bitmap::Framebuffer;
+pub use bitmap::{Damage, Framebuffer};
+
+#[derive(Default)]
+pub struct Snapshot {
+    pub pixels: Vec<u32>,
+    rows: Vec<u64>,
+    id: u64,
+    cursor_rows: Option<std::ops::Range<usize>>,
+    pub copied_rows: usize,
+}
+
+#[cfg(test)]
+mod snapshot_regressions {
+    use super::*;
+    #[test]
+    fn recycled_snapshots_keep_damage_and_restore_cursor_backgrounds() {
+        let mut state = Session::new(1002, 1003).unwrap();
+        state.framebuffer = Framebuffer::new(64, 64).unwrap();
+        state.framebuffer.pixels.fill(0x123456);
+        let mut snapshots: Vec<_> = (0..3).map(|_| Snapshot::default()).collect();
+        for s in &mut snapshots {
+            state.update_snapshot(s);
+        }
+        let shape = [
+            6, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 2, 0, 4, 0, 0, 0, 255, 0, 0, 0,
+        ];
+        let mut padded_shape = shape.to_vec();
+        padded_shape.splice(2..2, [0, 0]);
+        state.pointer.update(&padded_shape).unwrap();
+        for frame in 0..30 {
+            let row = frame % 64;
+            state.framebuffer.pixels[row * 64 + 7] ^= 0xabcdef;
+            state.framebuffer.damage.mark(row, row + 1);
+            let mut position = vec![3, 0, 0, 0];
+            position.extend((frame as u16).to_le_bytes());
+            position.extend((frame as u16 + 1).to_le_bytes());
+            state.pointer.update(&position).unwrap();
+            let snapshot = &mut snapshots[frame % 3];
+            state.update_snapshot(snapshot);
+            let mut reference = Vec::new();
+            state.copy_display(&mut reference);
+            assert_eq!(snapshot.pixels, reference);
+            assert!(snapshot.copied_rows <= 4);
+        }
+        // Hiding the pointer must restore its pixels even without bitmap damage.
+        state.pointer.update(&[1, 0, 0, 0, 0, 0, 0, 0]).unwrap();
+        for s in &mut snapshots {
+            state.update_snapshot(s);
+            assert_eq!(s.pixels, state.framebuffer.pixels);
+            state.update_snapshot(s);
+            assert_eq!(s.copied_rows, 0);
+        }
+        // Same pixel count, different stride: identity invalidates every snapshot.
+        state.framebuffer = Framebuffer::new(32, 128).unwrap();
+        for s in &mut snapshots {
+            state.update_snapshot(s);
+            assert_eq!(s.copied_rows, 128);
+            assert_eq!(s.pixels, state.framebuffer.pixels);
+        }
+    }
+}
 pub use fastpath::frame_length;
 pub use input::Input;
 
@@ -349,6 +409,35 @@ impl Session {
             usize::from(self.framebuffer.width),
             usize::from(self.framebuffer.height),
         );
+    }
+
+    pub fn update_snapshot(&self, snapshot: &mut Snapshot) {
+        let fb = &self.framebuffer;
+        let reset = snapshot.id != fb.damage.id || snapshot.pixels.len() != fb.pixels.len();
+        if reset {
+            snapshot.pixels.resize(fb.pixels.len(), 0);
+            snapshot.rows = vec![0; fb.height as usize];
+            snapshot.id = fb.damage.id;
+            snapshot.cursor_rows = None;
+        }
+        snapshot.copied_rows = 0;
+        let width = fb.width as usize;
+        for (row, version) in fb.damage.rows.iter().enumerate() {
+            if snapshot.rows[row] != *version
+                || snapshot
+                    .cursor_rows
+                    .as_ref()
+                    .is_some_and(|r| r.contains(&row))
+            {
+                snapshot.pixels[row * width..(row + 1) * width]
+                    .copy_from_slice(&fb.pixels[row * width..(row + 1) * width]);
+                snapshot.rows[row] = *version;
+                snapshot.copied_rows += 1;
+            }
+        }
+        self.pointer
+            .overlay(&mut snapshot.pixels, width, fb.height as usize);
+        snapshot.cursor_rows = self.pointer.rows(fb.height as usize);
     }
 
     fn send(&self, data: &[u8]) -> Result<Vec<u8>> {

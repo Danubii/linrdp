@@ -141,12 +141,31 @@ reduce network bandwidth or change the server's encoding rate.
 
 The decoder applies every protocol update to its authoritative framebuffer.
 When the UI has consumed the pending snapshot, the receiver composites the
-current pixels and cursor into a reusable staging buffer outside the display
+changed pixel rows and cursor into a reusable staging buffer outside the display
 mutex. Buffer ownership is swapped through one pending slot into the UI.
 While that slot is occupied, incoming deltas continue to update the decoder;
 they do not trigger redundant full-screen copies. The next snapshot includes
 all accumulated changes. This is bounded coalescing, not packet dropping or
 frame interpolation. One already queued snapshot may precede newer updates.
+
+Every snapshot retains the row generations actually stored in its allocation.
+The generations travel with the pixels through the producer, pending slot and
+UI, so a recycled snapshot catches up on all missed rows. Cursor backgrounds
+are restored from the authoritative framebuffer before drawing the current
+pointer; a cursor-only change no longer copies the whole desktop. Resets use
+a new framebuffer identity, including same-area changes with a different stride.
+
+GFX uses the same principle at EndFrame: it records surface row changes and
+composes only rows missing from the selected output buffer. Mapping, deletion
+and size changes invalidate the layout. Pixel storage and its generations are
+exchanged together with the desktop; open frames remain invisible. These are
+row-granular optimizations, not rectangle-perfect damage or zero-copy decoding.
+
+AVC420 still decodes every H.264 reference update. Only the advertised regions
+are converted from YUV directly into the persistent surface, after validating
+all region bounds against both surface and decoded picture. This removes the
+temporary full-frame RGB allocation and subsequent region copy. Conversion
+retains the existing full-range BT.709 integer equations and padded strides.
 
 At the negotiated native resolution, the UI sends its pixel buffer directly to
 the window backend. Scaling uses one horizontal lookup table per frame and
@@ -158,6 +177,39 @@ repaints. Network reads have an 8 ms idle poll budget, and TCP_NODELAY avoids
 Nagle buffering of small outgoing input messages. These settings bound parts
 of client scheduling, not network latency or actual remote FPS. Keyboard and
 mouse-button transitions retain their existing ordered queues.
+
+Encrypted desktop writes now run on a separate writer thread. The decoder owns
+TLS state and enqueues ordered ciphertext into at most 256 blocks of 16 KiB
+(4 MiB, plus one active block). Queue exhaustion is an explicit connection
+error, never silent loss or a blocking enqueue. Each block has an absolute
+five-second write deadline. Closing wakes the reader before joining the worker;
+the writer gets a 100 ms graceful drain before socket shutdown cancels stalled
+I/O. This bounds the write-related shutdown wait, not native codec execution.
+The existing handshake/credential transport is unchanged.
+
+Regression coverage includes three-buffer damage history, cursor restoration,
+GFX frame boundaries/layout changes, AVC predictive references/odd region edges,
+stalled output with live input, bounded writer shutdown and a verified TLS
+round trip larger than the plaintext buffer limit.
+
+Local release measurements for this follow-up (not remote FPS):
+
+- GFX composition with one changed row: 0.010 ms at 1080p, 0.030 ms at 4K;
+  full-height damage: 0.791 ms and 2.810 ms respectively (300 iterations).
+- AVC conversion plus the former temporary-buffer copy: full 1080p
+  9.299 → 8.043 ms; a 64×64 region within a 1080p decoded picture
+  8.426 → 0.015 ms. Native H.264 decode time is excluded; conversion benchmarks
+  alternate order over six batches of 20 calls and report the upper median.
+- The existing 1024-delta/1080p snapshot benchmark measured 261.2 ms for
+  per-delta full copies and 5.1 ms for 17 demand-produced, row-aware snapshots.
+  This combines coalescing already present before this patch with row reuse;
+  it is not an isolated comparison against the previous coalesced implementation.
+
+```sh
+cargo test --release -p linrdp-proto --locked benchmark_graphics_presentation -- --ignored --nocapture
+cargo test --release -p linrdp-proto --locked benchmark_avc_region_conversion -- --ignored --nocapture
+cargo test --release -p fjern --locked benchmark_snapshot_burst -- --ignored --nocapture
+```
 
 On Wayland, buffer ownership follows each `wl_buffer.release`: a buffer becomes
 busy on submission, and resizing installs the replacement buffer's release

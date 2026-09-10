@@ -3,6 +3,7 @@ use crate::{session, tls};
 mod input;
 mod presentation;
 mod resize;
+mod transport;
 use linrdp_proto::{
     data,
     desktop::{Input, Phase, Session, frame_length},
@@ -25,7 +26,7 @@ type Error = Box<dyn std::error::Error>;
 struct Display {
     width: usize,
     height: usize,
-    pixels: Vec<u32>,
+    pixels: linrdp_proto::desktop::Snapshot,
     revision: u64,
     pending: bool,
     active: bool,
@@ -93,7 +94,7 @@ pub fn run(
     let shared = Mutex::new(Display {
         width: initial_width,
         height: initial_height,
-        pixels: vec![0; initial_width * initial_height],
+        pixels: Default::default(),
         revision: 0,
         pending: false,
         active: false,
@@ -104,6 +105,7 @@ pub fn run(
     });
     let stop = AtomicBool::new(false);
     let shutdown = stream.try_clone()?;
+    let mut transport = transport::Transport::new(stream.try_clone()?)?;
     let (sender, receiver) = mpsc::sync_channel::<(u64, Vec<Input>)>(128);
     std::thread::scope(|scope| -> Result<(), Error> {
         let shared = &shared;
@@ -111,7 +113,7 @@ pub fn run(
         let worker = scope.spawn(move || {
             let result = receive(
                 connection,
-                stream,
+                &mut transport,
                 &mut state,
                 shared,
                 stop,
@@ -125,14 +127,15 @@ pub fn run(
             if let Ok(Some(packet)) = state.input(&[Input::ReleaseAll])
                 && let Ok(packet) = data::encode(&packet)
             {
-                let _ = tls::write_plaintext(connection, stream, &packet);
+                let _ = transport.write_plaintext(connection, &packet);
             }
             if let Err(error) = result {
                 shared.lock().unwrap().error = Some(error.to_string());
             }
         });
         let result = (|| -> Result<(), Error> {
-            let mut pixels = vec![0; initial_width * initial_height];
+            let mut pixels = linrdp_proto::desktop::Snapshot::default();
+            pixels.pixels.resize(initial_width * initial_height, 0);
             let mut width = initial_width;
             let mut height = initial_height;
             let mut revision = 0;
@@ -185,10 +188,10 @@ pub fn run(
                 }
                 if size != rendered_size || revision != rendered_revision || window.needs_redraw() {
                     if size == (width, height) {
-                        window.update_with_buffer(&pixels, width, height)?;
+                        window.update_with_buffer(&pixels.pixels, width, height)?;
                     } else {
                         input::Viewport::new(size, (width, height)).render(
-                            &pixels,
+                            &pixels.pixels,
                             (width, height),
                             size,
                             &mut rendered,
@@ -222,6 +225,7 @@ pub fn run(
             Ok(())
         })();
         stop.store(true, Ordering::Relaxed);
+        let _ = shutdown.shutdown(Shutdown::Read);
         worker.join().map_err(|_| "desktop worker panicked")?;
         let _ = shutdown.shutdown(Shutdown::Both);
         if result.is_err()
@@ -239,7 +243,7 @@ struct Channels<'a> {
 }
 fn receive(
     connection: &mut rustls::ClientConnection,
-    stream: &mut TcpStream,
+    stream: &mut transport::Transport,
     state: &mut Session,
     shared: &Mutex<Display>,
     stop: &AtomicBool,
@@ -250,7 +254,7 @@ fn receive(
     let mut bytes = [0u8; 16384];
     let mut last_phase = state.phase;
     let mut updates = state.revision;
-    let mut staging = Vec::new();
+    let mut staging = linrdp_proto::desktop::Snapshot::default();
     let mut deadline = Instant::now() + Duration::from_secs(30);
     let mut partial_since = None;
     while !stop.load(Ordering::Relaxed) {
@@ -264,7 +268,7 @@ fn receive(
                 state.framebuffer.updates > 0,
             )? {
                 if let Some(packet) = state.input(&[Input::ReleaseAll])? {
-                    tls::write_plaintext(connection, stream, &data::encode(&packet)?)?;
+                    stream.write_plaintext(connection, &data::encode(&packet)?)?;
                 }
                 {
                     let mut frame = shared.lock().unwrap();
@@ -272,7 +276,7 @@ fn receive(
                     frame.active = false;
                 }
                 for packet in packets {
-                    tls::write_plaintext(connection, stream, &data::encode(&packet)?)?;
+                    stream.write_plaintext(connection, &data::encode(&packet)?)?;
                 }
             }
             shared.lock().unwrap().active =
@@ -280,7 +284,7 @@ fn receive(
         }
         if let Some(clipboard) = channels.clipboard.as_mut() {
             for packet in clipboard.poll().map_err(|e| e.to_string())? {
-                tls::write_plaintext(connection, stream, &data::encode(&packet)?)?;
+                stream.write_plaintext(connection, &data::encode(&packet)?)?;
             }
         }
         // A bounded channel preserves input ordering without blocking the UI.
@@ -294,7 +298,7 @@ fn receive(
                 return Ok(());
             }
             if let Some(packet) = state.input(&events)? {
-                tls::write_plaintext(connection, stream, &data::encode(&packet)?)?;
+                stream.write_plaintext(connection, &data::encode(&packet)?)?;
             }
         }
         if state.phase == Phase::Active
@@ -317,7 +321,7 @@ fn receive(
             &mut updates,
             !channels.resize.as_ref().is_some_and(|r| r.waiting()),
         );
-        match tls::read_chunk(connection, stream, &mut bytes) {
+        match stream.read_chunk(connection, &mut bytes) {
             Ok(0) => return Err("server closed the desktop connection".into()),
             Ok(count) => {
                 if pending.is_empty() {
@@ -360,7 +364,7 @@ fn receive(
                         shared.lock().unwrap().status = message;
                     }
                     for reply in replies {
-                        tls::write_plaintext(connection, stream, &data::encode(&reply)?)?;
+                        stream.write_plaintext(connection, &data::encode(&reply)?)?;
                     }
                     pending.drain(..length);
                     partial_since = if pending.is_empty() {

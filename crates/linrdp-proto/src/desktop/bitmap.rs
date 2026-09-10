@@ -5,6 +5,37 @@ pub struct Framebuffer {
     pub height: u16,
     pub pixels: Vec<u32>,
     pub updates: u64,
+    pub damage: Damage,
+}
+
+/// Row generations travel with framebuffer storage, including GFX swaps.
+pub struct Damage {
+    pub id: u64,
+    pub rows: Vec<u64>,
+}
+impl Damage {
+    pub fn stamp() -> u64 {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        NEXT.fetch_update(
+            std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed,
+            |n| n.checked_add(1),
+        )
+        .expect("damage generation exhausted")
+    }
+    fn new(height: usize) -> Self {
+        let id = Self::stamp();
+        Self {
+            id,
+            rows: vec![id; height],
+        }
+    }
+    pub fn mark(&mut self, top: usize, bottom: usize) {
+        let version = Self::stamp();
+        for row in self.rows.iter_mut().take(bottom).skip(top) {
+            *row = version;
+        }
+    }
 }
 impl Framebuffer {
     pub(super) fn validate_size(width: u16, height: u16) -> Result<()> {
@@ -25,6 +56,7 @@ impl Framebuffer {
             height,
             pixels: vec![0; usize::from(width) * usize::from(height)],
             updates: 0,
+            damage: Damage::new(height as usize),
         })
     }
     pub fn update(&mut self, data: &[u8]) -> Result<()> {
@@ -74,6 +106,7 @@ impl Framebuffer {
                 return Err(bad("invalid bitmap rectangle bounds, flags or color depth"));
             }
             let compressed = flags & 1 != 0;
+            self.damage.mark(top as usize, bottom as usize + 1);
             let mut decoded = Vec::new();
             let stride;
             let mut rgb_order = false;

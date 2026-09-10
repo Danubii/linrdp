@@ -87,6 +87,11 @@ struct Bitmap {
     height: usize,
     pixels: Vec<u32>,
 }
+struct SurfaceVersions {
+    origin: Option<(usize, usize)>,
+    id: u64,
+    rows: Vec<u64>,
+}
 pub struct Gfx {
     zgfx: crate::zgfx::Decoder,
     clear: ClearCodecDecoder,
@@ -104,6 +109,10 @@ pub struct Gfx {
     pub avc_enabled: bool,
     pub last_codec: Option<u16>,
     pub seen_codecs: u32,
+    pub composed_rows: usize,
+    composition_id: u64,
+    row_versions: Vec<u64>,
+    surface_versions: BTreeMap<u16, SurfaceVersions>,
 }
 impl Default for Gfx {
     fn default() -> Self {
@@ -129,6 +138,10 @@ impl Gfx {
             avc_enabled: false,
             last_codec: None,
             seen_codecs: 0,
+            composed_rows: 0,
+            composition_id: 0,
+            row_versions: Vec::new(),
+            surface_versions: BTreeMap::new(),
         }
     }
     pub fn partial(&self) -> bool {
@@ -308,6 +321,7 @@ impl Gfx {
                     let s = self.surface_mut(id)?;
                     r.check(s.buffer.width as usize, s.buffer.height as usize)?;
                     let w = s.buffer.width as usize;
+                    s.buffer.damage.mark(r.t, r.b);
                     for y in r.t..r.b {
                         s.buffer.pixels[y * w + r.l..y * w + r.r].fill(color);
                     }
@@ -423,22 +437,19 @@ impl Gfx {
                     .fold(0usize, |sum, r| sum.saturating_add(r.width() * r.height())),
             )?;
             meta.take(count * 2)?;
-            if let Some(frame) = self.avc.decode_bounded(
+            let target = &mut self.surfaces.get_mut(&id).unwrap().buffer;
+            let regions: Vec<_> = regions.iter().map(|r| (r.l, r.t, r.r, r.b)).collect();
+            if self.avc.decode_into(
                 id,
-                surface.buffer.width as usize,
-                surface.buffer.height as usize,
+                target.width as usize,
+                target.height as usize,
                 meta.0,
+                &mut target.pixels,
+                &regions,
             )? {
                 self.avc_frames = self.avc_frames.wrapping_add(1);
-                let target = &mut self.surface_mut(id)?.buffer;
-                for r in regions {
-                    r.check(frame.width, frame.height)?;
-                    for y in r.t..r.b {
-                        let dst = y * target.width as usize + r.l;
-                        let src = y * frame.width + r.l;
-                        target.pixels[dst..dst + r.width()]
-                            .copy_from_slice(&frame.pixels[src..src + r.width()]);
-                    }
+                for &(_, top, _, bottom) in &regions {
+                    target.damage.mark(top, bottom);
                 }
             }
             return Ok(());
@@ -560,6 +571,9 @@ impl Gfx {
                 let bottom = (y + height).min(r.b);
                 work += right.saturating_sub(left) * bottom.saturating_sub(top);
                 check_work(work)?;
+                if left < right && top < bottom {
+                    s.buffer.damage.mark(top, bottom);
+                }
                 for row in top..bottom {
                     for col in left..right {
                         let src = ((row - y) * 64 + col - x) * 4;
@@ -576,38 +590,99 @@ impl Gfx {
         let (w, h) = self
             .dimensions
             .ok_or_else(|| bad("graphics frame before reset"))?;
+        let resized = self.row_versions.len() != h as usize
+            || self
+                .output
+                .as_ref()
+                .is_none_or(|o| o.width != w || o.height != h);
         if self.output.as_ref().is_none_or(|o| {
             o.width != w || o.height != h || o.pixels.len() != w as usize * h as usize
         }) {
             self.output = Some(Framebuffer::new(w, h)?);
         }
-        let out = self.output.as_mut().unwrap();
-        // A full-size mapped surface overwrites every pixel. Other layouts
-        // still need clearing so deleted/unmapped areas cannot retain old pixels.
-        let covers_output = self
-            .surfaces
-            .values()
-            .any(|s| s.origin == Some((0, 0)) && s.buffer.width >= w && s.buffer.height >= h);
-        if !covers_output {
-            out.pixels.fill(0);
+        if self.composition_id == 0 || resized {
+            self.composition_id = self.output.as_ref().unwrap().damage.id;
+            self.row_versions = vec![0; h as usize];
+            self.surface_versions.clear();
         }
-        for s in self.surfaces.values() {
-            if let Some((x, y)) = s.origin {
-                if x >= w as usize || y >= h as usize {
-                    continue;
-                }
-                let width = (s.buffer.width as usize).min(w as usize - x);
-                let height = (s.buffer.height as usize).min(h as usize - y);
-                for row in 0..height {
-                    let src = row * s.buffer.width as usize;
-                    let dst = (row + y) * w as usize + x;
-                    out.pixels[dst..dst + width]
-                        .copy_from_slice(&s.buffer.pixels[src..src + width]);
+        let next = self
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| bad("graphics revision exhausted"))?;
+        let layout_changed = resized
+            || self.surface_versions.len() != self.surfaces.len()
+            || self.surfaces.iter().any(|(id, s)| {
+                self.surface_versions
+                    .get(id)
+                    .is_none_or(|seen| seen.origin != s.origin || seen.id != s.buffer.damage.id)
+            });
+        let stamp = crate::desktop::Damage::stamp();
+        if layout_changed {
+            self.row_versions.fill(stamp);
+        }
+        for (id, s) in &self.surfaces {
+            if let Some((_, y)) = s.origin {
+                for (row, version) in s.buffer.damage.rows.iter().enumerate() {
+                    if y + row < h as usize
+                        && self
+                            .surface_versions
+                            .get(id)
+                            .is_none_or(|seen| seen.rows.get(row) != Some(version))
+                    {
+                        self.row_versions[y + row] = stamp;
+                    }
                 }
             }
         }
-        self.revision = self.revision.wrapping_add(1);
-        out.updates = self.revision;
+        self.surface_versions
+            .retain(|id, _| self.surfaces.contains_key(id));
+        for (id, s) in &self.surfaces {
+            let stored = self
+                .surface_versions
+                .entry(*id)
+                .or_insert_with(|| SurfaceVersions {
+                    origin: s.origin,
+                    id: s.buffer.damage.id,
+                    rows: Vec::new(),
+                });
+            stored.origin = s.origin;
+            stored.id = s.buffer.damage.id;
+            stored.rows.clone_from(&s.buffer.damage.rows);
+        }
+        let out = self.output.as_mut().unwrap();
+        self.composed_rows = 0;
+        let reset = resized || out.damage.id != self.composition_id;
+        // Each recycled output retains the generations actually stored in it.
+        // Rebuild all rows missed since that buffer was last presented.
+        for row in 0..h as usize {
+            if !reset && out.damage.rows[row] == self.row_versions[row] {
+                continue;
+            }
+            self.composed_rows += 1;
+            let line = &mut out.pixels[row * w as usize..(row + 1) * w as usize];
+            let covered = self.surfaces.values().any(|s| {
+                s.origin.is_some_and(|(x, y)| {
+                    x == 0 && y <= row && row < y + s.buffer.height as usize && s.buffer.width >= w
+                })
+            });
+            if !covered {
+                line.fill(0);
+            }
+            for s in self.surfaces.values() {
+                if let Some((x, y)) = s.origin {
+                    if x >= w as usize || row < y || row >= y + s.buffer.height as usize {
+                        continue;
+                    }
+                    let width = (s.buffer.width as usize).min(w as usize - x);
+                    let src = (row - y) * s.buffer.width as usize;
+                    line[x..x + width].copy_from_slice(&s.buffer.pixels[src..src + width]);
+                }
+            }
+            out.damage.rows[row] = self.row_versions[row];
+        }
+        out.damage.id = self.composition_id;
+        self.revision = next;
+        out.updates = next;
         Ok(())
     }
 }
@@ -641,6 +716,7 @@ fn blit(f: &mut Framebuffer, b: &Bitmap, x: usize, y: usize) -> Result<()> {
     if x + b.width > f.width as usize || y + b.height > f.height as usize {
         return Err(bad("graphics copy outside destination"));
     }
+    f.damage.mark(y, y + b.height);
     for row in 0..b.height {
         let dst = (y + row) * f.width as usize + x;
         f.pixels[dst..dst + b.width].copy_from_slice(&b.pixels[row * b.width..(row + 1) * b.width]);
@@ -771,16 +847,21 @@ mod tests {
             );
             let mut desktop = Framebuffer::new(w, h).unwrap();
             g.present().unwrap();
-            let began = std::time::Instant::now();
-            for _ in 0..300 {
-                g.present().unwrap();
-                std::mem::swap(&mut desktop.pixels, &mut g.output.as_mut().unwrap().pixels);
-                std::hint::black_box(&desktop.pixels);
+            for rows in [1, h as usize] {
+                let began = std::time::Instant::now();
+                for _ in 0..300 {
+                    let surface = g.surface_mut(1).unwrap();
+                    surface.buffer.pixels[0] ^= 0xffffff;
+                    surface.buffer.damage.mark(0, rows);
+                    g.present().unwrap();
+                    std::mem::swap(&mut desktop, g.output.as_mut().unwrap());
+                    std::hint::black_box(&desktop.pixels);
+                }
+                println!(
+                    "{w}x{h}, {rows} dirty rows: {:.3} ms/frame",
+                    began.elapsed().as_secs_f64() * 1000.0 / 300.0
+                );
             }
-            println!(
-                "{w}x{h}: {:.3} ms/frame",
-                began.elapsed().as_secs_f64() * 1000.0 / 300.0
-            );
         }
     }
     #[test]
@@ -829,10 +910,7 @@ mod tests {
         fill(&mut g, 0x123456);
         g.present().unwrap();
         let mut displayed = Framebuffer::new(2, 2).unwrap();
-        std::mem::swap(
-            &mut displayed.pixels,
-            &mut g.output.as_mut().unwrap().pixels,
-        );
+        std::mem::swap(&mut displayed, g.output.as_mut().unwrap());
         // The recycled buffer can have the previous remote resolution.
         g.present().unwrap();
         assert_eq!(g.output.as_ref().unwrap().pixels, vec![0x123456; 16]);
@@ -846,6 +924,54 @@ mod tests {
         g.surface_mut(1).unwrap().origin = None;
         g.present().unwrap();
         assert_eq!(g.output.as_ref().unwrap().pixels, vec![0; 16]);
+    }
+    #[test]
+    fn sparse_composition_restores_all_missed_rows_across_three_buffers() {
+        let mut g = setup();
+        let mut buffers: Vec<_> = (0..3).map(|_| Framebuffer::new(4, 4).unwrap()).collect();
+        for frame in 0..30u32 {
+            let row = frame as usize % 4;
+            let color = if frame % 2 == 0 { frame + 1 } else { 0 };
+            let mut fill = 1u16.to_le_bytes().to_vec();
+            fill.extend(color.to_le_bytes());
+            fill.extend(1u16.to_le_bytes());
+            for n in [0, row as u16, 4, row as u16 + 1] {
+                fill.extend(n.to_le_bytes());
+            }
+            start(&mut g, frame);
+            let before = g.output.as_ref().map(|o| o.pixels.clone());
+            send(&mut g, 4, &fill).unwrap();
+            assert_eq!(g.output.as_ref().map(|o| o.pixels.clone()), before);
+            send(&mut g, 0xc, &frame.to_le_bytes()).unwrap();
+            assert_eq!(
+                g.output.as_ref().unwrap().pixels,
+                g.surface(1).unwrap().buffer.pixels
+            );
+            std::mem::swap(g.output.as_mut().unwrap(), &mut buffers[frame as usize % 3]);
+        }
+        g.present().unwrap();
+        g.present().unwrap();
+        assert_eq!(g.composed_rows, 0);
+        // One new row now needs exactly one row of composition.
+        let s = g.surface_mut(1).unwrap();
+        s.buffer.pixels[0] ^= 0xffffff;
+        s.buffer.damage.mark(0, 1);
+        g.present().unwrap();
+        assert_eq!(g.composed_rows, 1);
+        assert_eq!(
+            g.output.as_ref().unwrap().pixels,
+            g.surface(1).unwrap().buffer.pixels
+        );
+        // A recycled desktop may also have received legacy bitmap damage.
+        // Its generations must not collide with GFX's frame counter.
+        let recycled = g.output.as_mut().unwrap();
+        recycled.pixels[7] = 0xdeadbeef;
+        recycled.damage.mark(1, 2);
+        g.present().unwrap();
+        assert_eq!(
+            g.output.as_ref().unwrap().pixels,
+            g.surface(1).unwrap().buffer.pixels
+        );
     }
     #[test]
     fn fragmented_and_concatenated_pdus() {

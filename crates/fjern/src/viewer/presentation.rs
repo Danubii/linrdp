@@ -2,7 +2,7 @@
 use super::{Display, Mutex, Phase, Session};
 
 impl Display {
-    pub(super) fn take_pixels(&mut self, pixels: &mut Vec<u32>) {
+    pub(super) fn take_pixels(&mut self, pixels: &mut linrdp_proto::desktop::Snapshot) {
         std::mem::swap(pixels, &mut self.pixels);
         self.pending = false;
     }
@@ -11,7 +11,7 @@ impl Display {
 pub(super) fn publish(
     state: &Session,
     shared: &Mutex<Display>,
-    staging: &mut Vec<u32>,
+    staging: &mut linrdp_proto::desktop::Snapshot,
     updates: &mut u64,
     resize_ready: bool,
 ) -> bool {
@@ -25,7 +25,7 @@ pub(super) fn publish(
     }
     // The worker is the sole producer. The UI only consumes, so the empty slot
     // stays available while this full-screen copy runs outside the mutex.
-    state.copy_display(staging);
+    state.update_snapshot(staging);
     let mut frame = shared.lock().unwrap();
     frame.width = usize::from(state.framebuffer.width);
     frame.height = usize::from(state.framebuffer.height);
@@ -48,11 +48,16 @@ mod tests {
         state.framebuffer = Framebuffer::new(32, 32).unwrap();
         state.phase = Phase::Active;
         let shared = Mutex::new(Display::default());
-        let mut staging = Vec::new();
+        let mut staging = linrdp_proto::desktop::Snapshot::default();
         let mut updates = 0;
-        let mut pixels = vec![0; 1024];
+        let mut pixels = linrdp_proto::desktop::Snapshot::default();
+        pixels.pixels.resize(1024, 0);
         assert!(!publish(&state, &shared, &mut staging, &mut updates, true));
         for index in 0..1024 {
+            state.framebuffer.damage.mark(
+                index / state.framebuffer.width as usize,
+                index / state.framebuffer.width as usize + 1,
+            );
             state.framebuffer.pixels[index] = index as u32 + 1;
             state.framebuffer.updates += 1;
             state.revision += 1;
@@ -64,15 +69,15 @@ mod tests {
         }
         {
             let mut frame = shared.lock().unwrap();
-            let allocation = frame.pixels.as_ptr();
-            let recycled = pixels.as_ptr();
+            let allocation = frame.pixels.pixels.as_ptr();
+            let recycled = pixels.pixels.as_ptr();
             frame.take_pixels(&mut pixels);
-            assert_eq!(pixels.as_ptr(), allocation);
-            assert_eq!(frame.pixels.as_ptr(), recycled);
+            assert_eq!(pixels.pixels.as_ptr(), allocation);
+            assert_eq!(frame.pixels.pixels.as_ptr(), recycled);
         }
         assert!(publish(&state, &shared, &mut staging, &mut updates, true));
         shared.lock().unwrap().take_pixels(&mut pixels);
-        assert_eq!(pixels, state.framebuffer.pixels);
+        assert_eq!(pixels.pixels, state.framebuffer.pixels);
         assert!(!publish(&state, &shared, &mut staging, &mut updates, true));
         assert_eq!(shared.lock().unwrap().revision, 2);
 
@@ -86,7 +91,7 @@ mod tests {
         assert!(!frame.active);
         assert_eq!((frame.width, frame.height), (20, 30));
         frame.take_pixels(&mut pixels);
-        assert_eq!(pixels, vec![0xabcdef; 600]);
+        assert_eq!(pixels.pixels, vec![0xabcdef; 600]);
     }
 
     #[test]
@@ -99,16 +104,25 @@ mod tests {
         let mut output = Vec::new();
         let start = Instant::now();
         for index in 0..1024 {
+            state.framebuffer.damage.mark(
+                index / state.framebuffer.width as usize,
+                index / state.framebuffer.width as usize + 1,
+            );
             state.framebuffer.pixels[index] = index as u32;
             state.copy_display(black_box(&mut output));
         }
         let old = start.elapsed();
+        let mut output = linrdp_proto::desktop::Snapshot::default();
         let shared = Mutex::new(Display::default());
-        let mut staging = Vec::new();
+        let mut staging = linrdp_proto::desktop::Snapshot::default();
         let mut updates = 0;
         let start = Instant::now();
         let mut snapshots = 0;
         for index in 0..1024 {
+            state.framebuffer.damage.mark(
+                index / state.framebuffer.width as usize,
+                index / state.framebuffer.width as usize + 1,
+            );
             state.framebuffer.pixels[index] = index as u32;
             state.framebuffer.updates += 1;
             state.revision += 1;
@@ -125,7 +139,7 @@ mod tests {
         }
         snapshots += usize::from(publish(&state, &shared, &mut staging, &mut updates, true));
         shared.lock().unwrap().take_pixels(&mut output);
-        assert_eq!(output, state.framebuffer.pixels);
+        assert_eq!(output.pixels, state.framebuffer.pixels);
         println!(
             "1080p / 1024 deltas / UI consumes every 64 deltas: per-packet copy {old:?}; demand snapshots {:?}, {snapshots} copies",
             start.elapsed()

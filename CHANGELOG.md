@@ -4,6 +4,13 @@ All notable user-facing changes are documented here.
 
 ## Unreleased
 
+- Keep RDP reception responsive during slow writes with a bounded, ordered
+  ciphertext queue and cancellation of stalled writes on close.
+- Track row damage across recycled RDP snapshots and GFX outputs; cursor-only
+  changes no longer trigger full desktop copies.
+- Convert AVC420 regions directly into existing surfaces without a temporary
+  full-frame RGB image, preserving reference decoding and color conversion.
+
 - Apply small VNC tiles in one UI iteration and scale explicit damage spans
   without scanning or keeping a second source image.
 - Submit Wayland frames through mapped shared memory with partial row updates
