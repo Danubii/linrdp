@@ -110,10 +110,10 @@ impl Store {
         if !base.is_absolute() {
             return Err("XDG_CONFIG_HOME must be an absolute path".into());
         }
-        Ok(Self::at(base.join("linrdp").join("profiles.json")))
+        Ok(Self::at(base.join("fjern").join("profiles.json")))
     }
 
-    fn at(path: PathBuf) -> Self {
+    pub(crate) fn at(path: PathBuf) -> Self {
         Self { path }
     }
 
@@ -222,7 +222,7 @@ mod tests {
     #[test]
     fn store_roundtrips_atomically_with_private_permissions() {
         let directory = tempfile::tempdir().unwrap();
-        let store = Store::at(directory.path().join("linrdp/profiles.json"));
+        let store = Store::at(directory.path().join("fjern/profiles.json"));
         store.save(&[profile("Lab")]).unwrap();
         assert_eq!(store.load().unwrap(), [profile("Lab")]);
         assert_eq!(

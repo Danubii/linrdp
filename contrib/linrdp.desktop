@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=LinRDP
-Comment=Connect to a remote desktop
-Exec=linrdp tui
-Icon=computer
-Terminal=true
-Categories=Network;RemoteAccess;
-Keywords=RDP;Remote Desktop;

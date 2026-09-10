@@ -1,15 +1,15 @@
 # Clipboard copy and paste
 
 Clipboard sharing is enabled by default for `connect`. Copy files or folders in
-Nautilus, focus LinRDP, and paste in Windows File Explorer with Ctrl+V. For the
+Nautilus, focus Fjern, and paste in Windows File Explorer with Ctrl+V. For the
 reverse direction, copy in Windows File Explorer, wait for the download to
 complete, then paste in the local file manager. Unicode text also works in both
 directions. Use Copy (Ctrl+C); Cut/move and drag-and-drop are not implemented.
 No shared drive or server installation is required.
 
 ```sh
-linrdp connect my-computer.example --user tester --size 1920x1080 --clipboard on
-linrdp connect my-computer.example --user tester --clipboard off
+fjern connect my-computer.example --user tester --size 1920x1080 --clipboard on
+fjern connect my-computer.example --user tester --clipboard off
 ```
 
 Apply the usual certificate trust options when needed. The native clipboard
@@ -25,7 +25,7 @@ directory when they are copied, before publishing local file URLs. Wait for
 completion before pasting. This eager staging makes ordinary file-manager paste
 possible without a filesystem service, but consumes disk space even if you never
 paste. A newer local clipboard selection takes precedence over a pending remote
-publication. Closing LinRDP removes its clipboard ownership and staged data;
+publication. Closing Fjern removes its clipboard ownership and staged data;
 paste files before disconnecting. Completed copies in the chosen destination
 remain there.
 
@@ -56,7 +56,7 @@ paste-on-demand and broader clipboard compatibility remain future work.
 
 ## Protocol and verification
 
-LinRDP implements the `cliprdr` static virtual channel and MS-RDPECLIP format
+Fjern implements the `cliprdr` static virtual channel and MS-RDPECLIP format
 negotiation, Unicode text, FileGroupDescriptorW and ranged file contents. File
 locking and huge-file extensions are not advertised. Virtual-channel fragments
 include SHOW_PROTOCOL so Windows can reassemble them. The parser accepts the

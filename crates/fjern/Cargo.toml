@@ -1,10 +1,10 @@
 [package]
-name = "linrdp"
+name = "fjern"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "An Omarchy-first Linux client for RDP and VNC (early development)"
+description = "Native Linux remote desktop client for RDP and VNC, developed first for Omarchy"
 publish = false
 
 [dependencies]

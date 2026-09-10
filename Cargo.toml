@@ -1,13 +1,13 @@
 [workspace]
-members = ["crates/linrdp-proto", "crates/linrdp"]
+members = ["crates/linrdp-proto", "crates/fjern"]
 resolver = "3"
 exclude = ["vendor/minifb", "vendor/vnc-rs"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/Danubii/linrdp"
+repository = "https://github.com/zeq0r/linrdp"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

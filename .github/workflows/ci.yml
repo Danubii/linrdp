@@ -14,5 +14,5 @@ jobs:
       - run: cargo +stable test --workspace --locked
       - name: Install XKB runtime for native keyboard regression
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon0
-      - run: cargo +stable test --manifest-path vendor/minifb/Cargo.toml --locked --lib linrdp_
+      - run: cargo +stable test --manifest-path vendor/minifb/Cargo.toml --locked --lib fjern_
       - run: cargo +stable build --workspace --release --locked

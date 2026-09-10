@@ -45,7 +45,7 @@ These options require their respective protocol extensions and host testing.
 A client connection is not the same as a server-side user session. The host
 controls whether a connection resumes an existing session, creates one or is
 refused. Concurrent user capacity depends on host edition, deployment and
-policy. LinRDP does not override those decisions.
+policy. Fjern does not override those decisions.
 
 GNOME distinguishes desktop sharing from remote login. xrdp supports
 reconnecting to existing sessions. Treat these as separate compatibility test

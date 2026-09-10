@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 use wl_clipboard_rs::{copy, paste};
-const PREFIX: &str = "application/x-linrdp-clipboard-";
+const PREFIX: &str = "application/x-fjern-clipboard-";
 const LIMIT: u64 = 1024 * 1024;
 #[derive(Clone, PartialEq, Eq)]
 enum Raw {

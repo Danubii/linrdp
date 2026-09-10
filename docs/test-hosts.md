@@ -27,15 +27,15 @@ on the remote host, and whether an existing client can connect.
 Run from the Linux development machine, substituting the real host and port:
 
 ```sh
-cargo run -p linrdp -- probe rdp-host.example 3389
-cargo run -p linrdp -- tls rdp-host.example 3389
+cargo run -p fjern -- probe rdp-host.example 3389
+cargo run -p fjern -- tls rdp-host.example 3389
 ```
 
 If the host uses a private CA or self-signed certificate, obtain the public
 certificate through a trusted channel and test explicit trust:
 
 ```sh
-cargo run -p linrdp -- tls rdp-host.example 3389 --ca /path/to/trusted-public-certificate.pem
+cargo run -p fjern -- tls rdp-host.example 3389 --ca /path/to/trusted-public-certificate.pem
 ```
 
 Never provide the private key. An explicitly trusted certificate must still
@@ -53,8 +53,8 @@ replaces issuer-chain and name checks and does not persist trust.
 ## NLA checks
 
 ```sh
-cargo run -p linrdp -- nla-probe rdp-host.example 3389 --ca /path/to/lab-ca.pem
-cargo run -p linrdp -- login rdp-host.example 3389 --user 'MACHINE\tester' --ca /path/to/lab-ca.pem
+cargo run -p fjern -- nla-probe rdp-host.example 3389 --ca /path/to/lab-ca.pem
+cargo run -p fjern -- login rdp-host.example 3389 --user 'MACHINE\tester' --ca /path/to/lab-ca.pem
 ```
 
 The same `--cert-sha256` option is available instead of `--ca`. The probe sends
@@ -67,7 +67,7 @@ Record whether early authorization succeeded, failed or was unavailable.
 After a successful login check, test settings and mandatory channel setup:
 
 ```sh
-cargo run -p linrdp -- session-probe rdp-host.example 3389 --user 'MACHINE\tester' --ca /path/to/lab-ca.pem
+cargo run -p fjern -- session-probe rdp-host.example 3389 --user 'MACHINE\tester' --ca /path/to/lab-ca.pem
 ```
 
 The same hidden-password prompt and trust options apply. Record the server core
@@ -77,7 +77,7 @@ requests 1024×768 at 32-bit color and stops before desktop activation.
 ## First desktop
 
 ```sh
-cargo run --release -p linrdp -- connect rdp-host.example --user 'MACHINE\tester' --ca /path/to/lab-ca.pem
+cargo run --release -p fjern -- connect rdp-host.example --user 'MACHINE\tester' --ca /path/to/lab-ca.pem
 ```
 
 The same certificate-pin alternative applies. Verify actual remote wallpaper,
@@ -102,7 +102,7 @@ results; do not commit credentials or private captures.
 
 ```text
 Date:
-LinRDP commit:
+Fjern commit:
 Client distro/version:
 Client desktop and Wayland/X11:
 Server OS/edition/build:

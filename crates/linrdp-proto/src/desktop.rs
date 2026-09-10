@@ -105,7 +105,7 @@ impl Session {
         let addr = utf16(&address.to_string(), 80)?;
         u16le(&mut b, addr.len() as u16);
         b.extend(addr);
-        let dir = utf16("LinRDP", 512)?;
+        let dir = utf16("Fjern", 512)?;
         u16le(&mut b, dir.len() as u16);
         b.extend(dir);
         // UTC timezone, no session ID, and Windows visual quality features.

@@ -25,7 +25,7 @@ pub fn config(ca_file: Option<&Path>) -> Result<Arc<ClientConfig>, Error> {
     } else {
         let result = rustls_native_certs::load_native_certs();
         for error in result.errors {
-            eprintln!("linrdp: warning: could not load some system certificates: {error}");
+            eprintln!("fjern: warning: could not load some system certificates: {error}");
         }
         for certificate in result.certs {
             roots.add(certificate)?;

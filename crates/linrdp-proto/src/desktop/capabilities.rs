@@ -121,7 +121,8 @@ pub(super) fn confirm(user: u16, server: u16, d: Demand) -> Result<Vec<u8>> {
     u16le(&mut b, server);
     u16le(&mut b, 7);
     u16le(&mut b, (caps.len() + 4) as u16);
-    b.extend(b"LinRDP\0");
+    // Keep the seven-byte source descriptor used by the existing wire layout.
+    b.extend(b"Fjern\0\0");
     u16le(&mut b, count);
     u16le(&mut b, 0);
     b.extend(caps);

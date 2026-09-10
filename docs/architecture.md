@@ -2,7 +2,7 @@
 
 ## Scope
 
-LinRDP is a Linux client with an original Rust implementation of RDP.
+Fjern is a Linux client with an original Rust implementation of RDP.
 Existing RDP servers handle remote sessions. No server, relay, account service,
 or custom wire protocol belongs in this repository.
 
@@ -12,8 +12,8 @@ or custom wire protocol belongs in this repository.
   desktop activation, bounded bitmap decoding, pointer compositing and CLIPRDR
   wire formats and static-channel fragmentation. It is
   independent of UI and networking. IronRDP graphics supplies interleaved RLE
-  decompression; LinRDP owns the session protocol and capability negotiation.
-- `linrdp`: diagnostics and the `connect` executable, verified rustls transport,
+  decompression; Fjern owns the session protocol and capability negotiation.
+- `fjern`: diagnostics and the `connect` executable, verified rustls transport,
   sspi-rs NTLM authentication, hidden credential prompting, and native display.
   See [TLS and trust](tls.md), [CredSSP status](credssp.md) and
   [desktop scope](desktop.md).

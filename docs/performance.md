@@ -37,7 +37,7 @@ X11 exposure events request a repaint even if the remote image is unchanged.
 ## Reproducing CPU measurements
 
 ```sh
-cargo test --release -p linrdp benchmark_ -- --ignored --nocapture --test-threads=1
+cargo test --release -p fjern benchmark_ -- --ignored --nocapture --test-threads=1
 ```
 
 The viewport benchmark compares the previous renderer with the production
@@ -112,7 +112,7 @@ cargo test --manifest-path vendor/minifb/Cargo.toml --release native_ -- --ignor
 For interactive performance testing, use the optimized binary:
 
 ```sh
-cargo run --release -p linrdp -- tui
+cargo run --release -p fjern -- tui
 ```
 
 A plain `cargo run` builds without release optimizations and is unsuitable for

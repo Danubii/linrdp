@@ -1,6 +1,6 @@
 # VNC connections
 
-WayVNC on Omarchy is the primary VNC interoperability target. LinRDP remains a
+WayVNC on Omarchy is the primary VNC interoperability target. Fjern remains a
 general RFB client and keeps server-specific behavior explicit.
 
 Select the RDP/VNC button on the terminal connection screen to choose VNC.
@@ -9,9 +9,9 @@ connection normally. VNC profiles accept an optional username and never store a
 password. Existing profiles without a protocol setting remain RDP connections.
 
 ```sh
-cargo run --release -p linrdp -- vnc workstation.example 5900
-cargo run --release -p linrdp -- vnc workstation.example 5900 --user alice
-cargo run --release -p linrdp -- tui
+cargo run --release -p fjern -- vnc workstation.example 5900
+cargo run --release -p fjern -- vnc workstation.example 5900 --user alice
+cargo run --release -p fjern -- tui
 ```
 
 The VNC adapter uses the [vnc-rs engine](https://docs.rs/vnc-rs/0.5.3/vnc/).
@@ -49,7 +49,7 @@ apply to VNC.
 
 Start WayVNC without `--render-cursor` (or `-r`). That server option composites
 the host pointer into captured pixels, where a client cannot separate it from
-the desktop. With the option absent, LinRDP requests cursor pseudo-encoding and
+the desktop. With the option absent, Fjern requests cursor pseudo-encoding and
 keeps only its local pointer visible.
 
 On Wayland, `Ctrl+Alt+Shift+Enter` captures compositor shortcuts for the VNC

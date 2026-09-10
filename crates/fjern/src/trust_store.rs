@@ -43,8 +43,12 @@ impl Store {
             return Err("certificate trust configuration directory must be absolute".into());
         }
         Ok(Self {
-            path: config.join("linrdp/known_hosts.json"),
+            path: config.join("fjern/known_hosts.json"),
         })
+    }
+
+    pub(crate) fn at(path: PathBuf) -> Self {
+        Self { path }
     }
 
     pub fn get(&self, host: &str, port: u16) -> Result<Option<Fingerprint>, Error> {
@@ -121,6 +125,10 @@ impl Store {
         temporary.persist(&self.path).map_err(|error| error.error)?;
         directory_file.sync_all()?;
         Ok(())
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), Error> {
+        self.read().map(|_| ())
     }
 
     fn read(&self) -> Result<KnownHosts, Error> {
@@ -209,7 +217,7 @@ mod tests {
     use super::*;
     fn store(directory: &tempfile::TempDir) -> Store {
         Store {
-            path: directory.path().join("linrdp/known_hosts.json"),
+            path: directory.path().join("fjern/known_hosts.json"),
         }
     }
     fn pin(byte: &str) -> Fingerprint {
