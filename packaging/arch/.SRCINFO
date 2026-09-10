@@ -15,6 +15,6 @@ pkgbase = fjern
 	depends = zstd
 	options = !debug
 	source = fjern-v0.2.0-x86_64-linux.tar.gz::https://github.com/zeq0r/fjern/releases/download/v0.2.0/fjern-v0.2.0-x86_64-linux.tar.gz
-	sha256sums = 13e0c95b0e5780b2d7f4b4c62508484cc008248f82dc968ceaf1b77d5b9668bc
+	sha256sums = 5715c3b7abedc6da4ed7cd4fff33ec26e5116305ca0ff641b66d35a0ca78d3f1
 
 pkgname = fjern

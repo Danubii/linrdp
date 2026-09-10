@@ -9,7 +9,7 @@ license=('MIT')
 options=('!debug')
 depends=('brotli' 'gcc-libs' 'glibc' 'libxkbcommon' 'openssl' 'wayland' 'zlib' 'zstd')
 source=("$pkgname-v$pkgver-x86_64-linux.tar.gz::$url/releases/download/v$pkgver/$pkgname-v$pkgver-x86_64-linux.tar.gz")
-sha256sums=('13e0c95b0e5780b2d7f4b4c62508484cc008248f82dc968ceaf1b77d5b9668bc')
+sha256sums=('5715c3b7abedc6da4ed7cd4fff33ec26e5116305ca0ff641b66d35a0ca78d3f1')
 
 package() {
   local bundle="$srcdir/$pkgname-v$pkgver-x86_64-linux"

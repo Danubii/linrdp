@@ -546,11 +546,11 @@ impl App {
                 self.selected = (self.selected + 10).min(self.profiles.len().saturating_sub(1));
                 Command::None
             }
-            KeyCode::Up | KeyCode::Left if self.active_text().is_none() => {
+            KeyCode::Up | KeyCode::Left => {
                 self.move_focus(true);
                 Command::None
             }
-            KeyCode::Down | KeyCode::Right if self.active_text().is_none() => {
+            KeyCode::Down | KeyCode::Right => {
                 self.move_focus(false);
                 Command::None
             }
@@ -1263,6 +1263,21 @@ mod tests {
         assert_eq!(app.focus, Focus::User);
         app.key(key(KeyCode::Tab));
         assert_eq!(app.focus, Focus::Connect);
+    }
+
+    #[test]
+    fn arrow_keys_move_focus_from_text_fields() {
+        let mut app = App::new(Vec::new(), None, None);
+        assert_eq!(app.focus, Focus::Computer);
+
+        app.key(key(KeyCode::Down));
+        assert_eq!(app.focus, Focus::User);
+        app.key(key(KeyCode::Right));
+        assert_eq!(app.focus, Focus::Connect);
+        app.key(key(KeyCode::Up));
+        assert_eq!(app.focus, Focus::User);
+        app.key(key(KeyCode::Left));
+        assert_eq!(app.focus, Focus::Computer);
     }
 
     #[test]

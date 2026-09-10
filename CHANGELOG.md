@@ -19,6 +19,8 @@ pins are never merged or replaced automatically.
 - Correctly treats RFB ExtendedDesktopSize status 4 as an asynchronously
   forwarded resize request rather than a rejection; local scaling and input
   mapping continue while waiting for a server layout update.
+- Arrow keys can now leave text fields in the terminal UI, so the entire form
+  can be navigated without tabbing through every control.
 
 ## 0.1.0 - 2026-09-09
 

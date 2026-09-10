@@ -11,8 +11,8 @@ for desktop sessions so decoding and rendering use compiler optimizations.
 The screen follows the familiar Remote Desktop Connection order: saved profile,
 protocol, Computer, User, then Connect. When profiles exist, focus starts in the
 saved list; otherwise it starts at Computer. Tab and Shift+Tab move between
-controls. Arrow keys also move between non-text controls, while Up, Down, Home,
-End, Page Up, and Page Down navigate the saved list. Enter activates the focused
+controls. Arrow keys move between all controls, including from text fields, while
+Up, Down, Home, End, Page Up, and Page Down navigate the saved list. Enter activates the focused
 control, and Esc exits. Ctrl+U clears the focused text field or profile-name
 prompt. Ctrl+S saves or updates, and Ctrl+N starts a clean connection. Open
 Options to set the port, initial size, dynamic resolution, clipboard sharing,
