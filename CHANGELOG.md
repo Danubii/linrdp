@@ -2,6 +2,13 @@
 
 All notable user-facing changes are documented here.
 
+## Unreleased
+
+- VNC consumes queued image tiles within a 4 ms UI work budget instead of
+  stopping after 64 events, reducing backlog for large ZRLE updates.
+- VNC CopyRect applies overlapping moves directly in the framebuffer without
+  allocating a temporary rectangle.
+
 ## 0.2.0 - 2026-09-10
 
 LinRDP has been renamed to Fjern. The executable and application crate are now

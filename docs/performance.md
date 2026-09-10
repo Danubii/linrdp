@@ -1,5 +1,36 @@
 # Desktop presentation performance
 
+## VNC tile scheduling and CopyRect
+
+The ZRLE decoder emits one image event per 64×64 tile. A full 1920×1080
+rectangle produces 510 events. The previous limit of 64 events per UI tick
+required at least eight ticks to consume that image, even with every tile
+already queued. VNC now processes queued events until 4 ms of work has elapsed,
+with a secondary cap of 4096 events per tick. Every event remains ordered;
+partial images and CopyRect dependencies are never discarded. The time budget
+is checked after each event, so a single expensive event can exceed it.
+
+CopyRect now moves rows directly within the framebuffer using overlap-safe
+copies. Downward moves run bottom-up; upward moves run top-down. This removes
+the temporary rectangle allocation and the extra copy. An exhaustive small-grid
+test compares all valid rectangle moves with a snapshot reference.
+
+An optimized local CPU benchmark of a 1920×1064 rectangle scrolled down by
+16 pixels measured 3.141 ms per update with the previous implementation and
+0.283 ms with the new one. It alternates execution order across six batches
+of 100 updates and reports the upper median. Reproduce with:
+
+```sh
+cargo test --release -p fjern benchmark_vnc_copy_rect --locked -- --ignored --nocapture
+```
+
+This is CPU copy time, not measured remote FPS. WayVNC's chosen encoding,
+network transfer, decoding and compositor timing still affect the visible
+result. CopyRect improvements apply only when the server sends CopyRect.
+The existing 16 ms incremental refresh request cadence is unchanged.
+
+## RDP presentation
+
 The default profile negotiates RGB565 bitmap updates with interleaved RLE and
 fast-path output. This branch adds an optional [H.264 graphics profile](h264.md).
 Client-side presentation optimizations do not

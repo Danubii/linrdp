@@ -13,6 +13,10 @@ use std::{
 use vnc::{Rect, VncEvent, X11Event};
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const MAX_PIXELS: usize = 16 * 1024 * 1024;
+// ZRLE emits one event per 64×64 tile (510 for a full 1080p image).
+// Bound UI work by time instead of stopping after only 64 tiles.
+const EVENT_BUDGET: Duration = Duration::from_millis(4);
+const MAX_EVENTS_PER_TICK: usize = 4096;
 
 struct HyprlandCapture {
     token: PathBuf,
@@ -136,15 +140,18 @@ impl Canvas {
                 if (src.width, src.height) != (dst.width, dst.height) {
                     return Err(invalid("VNC CopyRect size mismatch"));
                 }
-                let rows: Vec<_> = (0..usize::from(src.height))
-                    .flat_map(|y| {
-                        let at = (usize::from(src.y) + y) * self.width + usize::from(src.x);
-                        self.pixels[at..at + usize::from(src.width)].iter().copied()
-                    })
-                    .collect();
-                for (y, row) in rows.chunks(usize::from(dst.width)).enumerate() {
-                    let at = (usize::from(dst.y) + y) * self.width + usize::from(dst.x);
-                    self.pixels[at..at + row.len()].copy_from_slice(row);
+                // memmove within each row; copy bottom-up when moving down so
+                // overlapping destinations cannot overwrite unread source rows.
+                for row in 0..usize::from(src.height) {
+                    let y = if dst.y > src.y {
+                        usize::from(src.height) - 1 - row
+                    } else {
+                        row
+                    };
+                    let from = (usize::from(src.y) + y) * self.width + usize::from(src.x);
+                    let to = (usize::from(dst.y) + y) * self.width + usize::from(dst.x);
+                    self.pixels
+                        .copy_within(from..from + usize::from(src.width), to);
                 }
             }
             VncEvent::Error(e) => return Err(invalid(&format!("VNC connection: {e}"))),
@@ -673,7 +680,8 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
         let mut cursor_shape_active = false;
         let mut hyprland_capture = HyprlandCapture::new();
         while window.is_open() {
-            for _ in 0..64 {
+            let events_started = Instant::now();
+            for _ in 0..MAX_EVENTS_PER_TICK {
                 match runtime.block_on(client.poll_event())? {
                     Some(event) => {
                         match &event {
@@ -730,6 +738,9 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                             _ => {}
                         }
                         changed |= canvas.event(event)?;
+                        if events_started.elapsed() >= EVENT_BUDGET {
+                            break;
+                        }
                     }
                     None => break,
                 }
@@ -949,6 +960,109 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn copy_rect_matches_snapshot_for_all_small_overlaps() {
+        for width in 1..=4u16 {
+            for height in 1..=4u16 {
+                for sy in 0..=4 - height {
+                    for sx in 0..=4 - width {
+                        for dy in 0..=4 - height {
+                            for dx in 0..=4 - width {
+                                let original: Vec<u32> = (0..16).collect();
+                                let mut expected = original.clone();
+                                for y in 0..height {
+                                    for x in 0..width {
+                                        expected[usize::from((dy + y) * 4 + dx + x)] =
+                                            original[usize::from((sy + y) * 4 + sx + x)];
+                                    }
+                                }
+                                let mut canvas = Canvas {
+                                    width: 4,
+                                    height: 4,
+                                    pixels: original,
+                                };
+                                canvas
+                                    .event(VncEvent::Copy(
+                                        Rect {
+                                            x: dx,
+                                            y: dy,
+                                            width,
+                                            height,
+                                        },
+                                        Rect {
+                                            x: sx,
+                                            y: sy,
+                                            width,
+                                            height,
+                                        },
+                                    ))
+                                    .unwrap();
+                                assert_eq!(canvas.pixels, expected);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "CPU benchmark; run in release mode"]
+    fn benchmark_vnc_copy_rect() {
+        use std::hint::black_box;
+        let mut baseline = vec![0x123456u32; 1920 * 1080];
+        let mut canvas = Canvas {
+            width: 1920,
+            height: 1080,
+            pixels: baseline.clone(),
+        };
+        let src = Rect {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1064,
+        };
+        let dst = Rect { x: 0, y: 16, ..src };
+        let mut old_samples = Vec::new();
+        let mut new_samples = Vec::new();
+        for batch in 0..6 {
+            for optimized in if batch % 2 == 0 {
+                [false, true]
+            } else {
+                [true, false]
+            } {
+                let start = Instant::now();
+                for _ in 0..100 {
+                    if optimized {
+                        canvas.event(VncEvent::Copy(dst, src)).unwrap();
+                        black_box(&canvas.pixels);
+                    } else {
+                        let rows: Vec<_> = (0..1064)
+                            .flat_map(|y| baseline[y * 1920..(y + 1) * 1920].iter().copied())
+                            .collect();
+                        for (y, row) in rows.chunks(1920).enumerate() {
+                            baseline[(y + 16) * 1920..(y + 17) * 1920].copy_from_slice(row);
+                        }
+                        black_box(&baseline);
+                    }
+                }
+                let elapsed = start.elapsed().as_secs_f64() * 10.0;
+                if optimized {
+                    new_samples.push(elapsed);
+                } else {
+                    old_samples.push(elapsed);
+                }
+            }
+        }
+        old_samples.sort_by(f64::total_cmp);
+        new_samples.sort_by(f64::total_cmp);
+        assert_eq!(canvas.pixels, baseline);
+        eprintln!(
+            "1080p CopyRect milliseconds/update: previous={:.3}, optimized={:.3}",
+            old_samples[3], new_samples[3]
+        );
+    }
+
     #[test]
     fn validates_and_copies_overlapping_rectangles() {
         let mut c = Canvas::default();
