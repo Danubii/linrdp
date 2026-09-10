@@ -535,6 +535,20 @@ impl WaylandInput {
     }
 }
 
+// Axis values are displacement, not velocity. Keep every delta dispatched in
+// this update, including the final movement before AxisStop. AxisDiscrete is
+// metadata for the same movement and must not be counted a second time.
+fn accumulate_scroll(event: &wl_pointer::Event, x: &mut f32, y: &mut f32) {
+    use wayland_client::protocol::wl_pointer::Axis;
+    if let wl_pointer::Event::Axis { axis, value, .. } = event {
+        match axis {
+            Axis::VerticalScroll => *y += *value as f32,
+            Axis::HorizontalScroll => *x += *value as f32,
+            _ => {}
+        }
+    }
+}
+
 pub struct Window {
     display: DisplayInfo,
 
@@ -1045,33 +1059,16 @@ impl Window {
                         self.input.get_pointer().set_cursor(serial, None, 0, 0);
                     }
                 }
-                Event::Axis { axis, value, .. } => {
-                    use wayland_client::protocol::wl_pointer::Axis;
-
-                    match axis {
-                        Axis::VerticalScroll => self.scroll_y = value as f32,
-                        Axis::HorizontalScroll => self.scroll_x = value as f32,
-                        _ => {}
-                    }
+                event @ (Event::Axis { .. }
+                | Event::AxisStop { .. }
+                | Event::AxisDiscrete { .. }) => {
+                    accumulate_scroll(&event, &mut self.scroll_x, &mut self.scroll_y);
                 }
                 Event::Frame {} => {
                     // TODO
                 }
                 Event::AxisSource { axis_source } => {
                     let _ = axis_source;
-                    // TODO
-                }
-                Event::AxisStop { axis, .. } => {
-                    use wayland_client::protocol::wl_pointer::Axis;
-
-                    match axis {
-                        Axis::VerticalScroll => self.scroll_y = 0.,
-                        Axis::HorizontalScroll => self.scroll_x = 0.,
-                        _ => {}
-                    }
-                }
-                Event::AxisDiscrete { axis, discrete } => {
-                    let _ = (axis, discrete);
                     // TODO
                 }
                 Event::Leave { serial, .. } => {
@@ -1451,6 +1448,72 @@ impl Drop for Window {
             ffi_dispatch!(XKBH, xkb_keymap_unref, self.xkb_keymap);
             ffi_dispatch!(XKBH, xkb_context_unref, self.xkb_context);
         }
+    }
+}
+
+#[cfg(test)]
+mod fjern_scroll_tests {
+    use super::accumulate_scroll;
+    use wayland_client::protocol::wl_pointer::{Axis, Event};
+
+    fn axis(axis: Axis, value: f64) -> Event {
+        Event::Axis {
+            time: 0,
+            axis,
+            value,
+        }
+    }
+
+    #[test]
+    fn batched_motion_preserves_distance_on_both_axes() {
+        let (mut x, mut y) = (0., 0.);
+        for event in [
+            axis(Axis::VerticalScroll, 15.),
+            Event::Frame {},
+            axis(Axis::VerticalScroll, 15.),
+            axis(Axis::HorizontalScroll, -3.),
+            axis(Axis::HorizontalScroll, -2.),
+        ] {
+            accumulate_scroll(&event, &mut x, &mut y);
+        }
+        assert_eq!((x, y), (-5., 30.));
+    }
+
+    #[test]
+    fn stop_and_discrete_metadata_do_not_erase_or_duplicate_motion() {
+        let (mut x, mut y) = (0., 0.);
+        for event in [
+            axis(Axis::VerticalScroll, 15.),
+            Event::AxisDiscrete {
+                axis: Axis::VerticalScroll,
+                discrete: 1,
+            },
+            axis(Axis::HorizontalScroll, 0.5),
+            Event::AxisStop {
+                time: 1,
+                axis: Axis::VerticalScroll,
+            },
+            Event::AxisStop {
+                time: 1,
+                axis: Axis::HorizontalScroll,
+            },
+        ] {
+            accumulate_scroll(&event, &mut x, &mut y);
+        }
+        assert_eq!((x, y), (0.5, 15.));
+    }
+
+    #[test]
+    fn fractional_motion_and_reversal_are_added_without_rounding() {
+        let (mut x, mut y) = (0., 0.);
+        for value in [0.125, 0.125, -0.5] {
+            accumulate_scroll(&axis(Axis::VerticalScroll, value), &mut x, &mut y);
+        }
+        assert_eq!((x, y), (0., -0.25));
+        // The next update starts with fresh accumulators, not retained velocity.
+        let (mut x, mut y) = (0., 0.);
+        accumulate_scroll(&Event::Frame {}, &mut x, &mut y);
+        assert_eq!((x, y), (0., 0.));
     }
 }
 

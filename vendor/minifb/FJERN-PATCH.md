@@ -10,6 +10,12 @@ This patch resolves key transitions at level zero in the active layout;
 character callbacks still use the effective symbol. Modifier transitions remain
 separate. No compositor configuration is changed.
 
+Wayland scroll deltas are accumulated across all pointer events in an update,
+instead of retaining only the last delta. `AxisStop` no longer erases movement
+already received; discrete metadata is not double-counted. Fractional movement,
+axis independence and direction reversals are covered by `fjern_scroll_tests`.
+The application-level scroll units and sensitivity are unchanged.
+
 The Wayland and X11 backends also retain native left, middle and right mouse
 button down/up events in a bounded 192-edge queue, including short clicks or
 double-click sequences completed between application render frames. Fjern

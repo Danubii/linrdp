@@ -478,6 +478,38 @@ mod tests {
         };
     }
     #[test]
+    fn scroll_preserves_fractional_units_and_splits_large_deltas() {
+        let mut c = Controller {
+            focused: true,
+            position: Some((10, 10)),
+            ..Controller::default()
+        };
+        let mut scroll = |wheel| {
+            sample!(
+                &mut c,
+                true,
+                BTreeSet::new(),
+                vec![],
+                vec![],
+                Some((10, 10)),
+                [false; 3],
+                wheel
+            )
+        };
+        // Four quarter-unit movements must produce exactly one RDP unit.
+        for _ in 0..3 {
+            assert!(scroll(0.25 / 120.).is_empty());
+        }
+        assert_eq!(scroll(0.25 / 120.), vec![Input::Wheel { delta: 1 }]);
+        assert_eq!(scroll(-1.), vec![Input::Wheel { delta: -120 }]);
+        assert_eq!(
+            scroll(3.),
+            vec![Input::Wheel { delta: 255 }, Input::Wheel { delta: 105 }]
+        );
+        assert!(scroll(0.).is_empty());
+    }
+
+    #[test]
     fn callback_preserves_short_taps_and_bounds_event_storage() {
         let queue = Rc::new(RefCell::new(KeyQueue::default()));
         let mut callback = Callback(queue.clone());
