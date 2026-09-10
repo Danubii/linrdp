@@ -13,6 +13,10 @@ and `known_hosts.json` files from `~/.config/linrdp` when
 legacy directory untouched. Existing Fjern state always wins and certificate
 pins are never merged or replaced automatically.
 
+- Added deterministic Linux release bundles and an Arch Linux binary package.
+- Added clean Arch CI coverage for build, tests, `makepkg` and `namcap`.
+- Corrected the VNC smoke fixture's server-name length after the rebrand.
+
 ## 0.1.0 - 2026-09-09
 
 The first development release provides a keyboard-first Linux client for RDP

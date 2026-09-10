@@ -28,7 +28,8 @@ else:
  c.sendall(b'\x02\x81\x01' if '--unknown' in sys.argv else b'\x01\x01');assert read(1)==b'\x01'
 c.sendall(bytes(4));assert read(1)==b'\x01'
 pf=struct.pack('>BBBBHHHBBBxxx',32,24,0,1,255,255,255,16,8,0)
-c.sendall(struct.pack('>HH',64,64)+pf+struct.pack('>I',16)+b'Fjern VNC smoke')
+server_name=b'Fjern VNC smoke'
+c.sendall(struct.pack('>HH',64,64)+pf+struct.pack('>I',len(server_name))+server_name)
 requests=0;encodings=[];sizes=set()
 try:
  while True:
