@@ -1,0 +1,21 @@
+# Maintainer: Fjern contributors
+pkgname=fjern
+pkgver=0.2.0
+pkgrel=1
+pkgdesc='Native Linux remote desktop client for RDP and VNC'
+arch=('x86_64')
+url='https://github.com/zeq0r/fjern'
+license=('MIT')
+options=('!debug')
+depends=('brotli' 'gcc-libs' 'glibc' 'libxkbcommon' 'openssl' 'wayland' 'zlib' 'zstd')
+source=("$pkgname-v$pkgver-x86_64-linux.tar.gz::$url/releases/download/v$pkgver/$pkgname-v$pkgver-x86_64-linux.tar.gz")
+sha256sums=('de7b31ee55e0aa3e8a147a0ead98956cb0eb221163683b4815b19ac611a6ca7e')
+
+package() {
+  local bundle="$srcdir/$pkgname-v$pkgver-x86_64-linux"
+  install -Dm755 "$bundle/fjern" "$pkgdir/usr/bin/fjern"
+  install -Dm644 "$bundle/fjern.desktop" "$pkgdir/usr/share/applications/fjern.desktop"
+  install -Dm644 "$bundle/fjern.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/fjern.svg"
+  install -Dm644 "$bundle/LICENSE" "$pkgdir/usr/share/licenses/fjern/LICENSE"
+  install -Dm644 "$bundle/README.md" "$pkgdir/usr/share/doc/fjern/README.md"
+}

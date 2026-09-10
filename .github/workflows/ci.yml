@@ -16,3 +16,27 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon0
       - run: cargo +stable test --manifest-path vendor/minifb/Cargo.toml --locked --lib fjern_
       - run: cargo +stable build --workspace --release --locked
+  arch-package:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install build and package tools
+        run: pacman -Syu --noconfirm base-devel brotli clang cmake git libx11 libxkbcommon namcap nasm openssl pkgconf rustup wayland zlib zstd
+      - uses: actions/checkout@v4
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+      - run: cargo build --workspace --release --locked
+      - run: cargo test --workspace --locked
+      - name: Build release candidate archive
+        run: tools/package-release.sh v0.2.0 x86_64-linux dist
+      - name: Build and inspect Arch package
+        shell: bash
+        run: |
+          set -euo pipefail
+          digest="$(sha256sum dist/fjern-v0.2.0-x86_64-linux.tar.gz | cut -d' ' -f1)"
+          sed -i "s/^sha256sums=.*/sha256sums=('$digest')/" packaging/arch/PKGBUILD
+          useradd --create-home builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          runuser -u builder -- bash -c 'cd "$1/packaging/arch" && SRCDEST="$1/dist" makepkg --clean --cleanbuild --force' _ "$GITHUB_WORKSPACE"
+          namcap packaging/arch/PKGBUILD
+          namcap packaging/arch/fjern-*.pkg.tar.zst

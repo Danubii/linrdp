@@ -19,17 +19,7 @@ jobs:
       - run: cargo +stable test --workspace --locked
       - run: cargo +stable build --workspace --release --locked
       - name: Bundle release
-        shell: bash
-        run: |
-          set -euo pipefail
-          archive="fjern-${GITHUB_REF_NAME}-x86_64-linux"
-          install -Dm755 target/release/fjern "$archive/fjern"
-          install -Dm644 contrib/fjern.desktop "$archive/fjern.desktop"
-          install -Dm644 contrib/icons/fjern.svg "$archive/fjern.svg"
-          install -Dm644 LICENSE "$archive/LICENSE"
-          install -Dm644 README.md "$archive/README.md"
-          tar --sort=name --mtime="UTC 1970-01-01" --owner=0 --group=0 --numeric-owner -czf "$archive.tar.gz" "$archive"
-          sha256sum "$archive.tar.gz" > "$archive.tar.gz.sha256"
+        run: tools/package-release.sh "$GITHUB_REF_NAME" x86_64-linux .
       - uses: softprops/action-gh-release@v2
         with:
           files: |

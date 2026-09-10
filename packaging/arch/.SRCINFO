@@ -1,0 +1,20 @@
+pkgbase = fjern
+	pkgdesc = Native Linux remote desktop client for RDP and VNC
+	pkgver = 0.2.0
+	pkgrel = 1
+	url = https://github.com/zeq0r/fjern
+	arch = x86_64
+	license = MIT
+	depends = brotli
+	depends = gcc-libs
+	depends = glibc
+	depends = libxkbcommon
+	depends = openssl
+	depends = wayland
+	depends = zlib
+	depends = zstd
+	options = !debug
+	source = fjern-v0.2.0-x86_64-linux.tar.gz::https://github.com/zeq0r/fjern/releases/download/v0.2.0/fjern-v0.2.0-x86_64-linux.tar.gz
+	sha256sums = de7b31ee55e0aa3e8a147a0ead98956cb0eb221163683b4815b19ac611a6ca7e
+
+pkgname = fjern
