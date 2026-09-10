@@ -2,7 +2,7 @@
 
 All notable user-facing changes are documented here.
 
-## 0.2.0 - Unreleased
+## 0.2.0 - 2026-09-10
 
 LinRDP has been renamed to Fjern. The executable and application crate are now
 named `fjern`; the protocol crate intentionally remains `linrdp-proto`.
