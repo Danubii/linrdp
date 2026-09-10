@@ -9,13 +9,12 @@ license=('MIT' 'Apache-2.0' 'BSD-2-Clause' 'BSD-3-Clause' 'ISC' 'Unicode-3.0' 'U
 options=('!debug')
 provides=("fjern=$pkgver")
 conflicts=('fjern')
-depends=('brotli' 'gcc-libs' 'glibc' 'libxkbcommon' 'openssl' 'wayland' 'zlib' 'zstd')
-source=("fjern-v$pkgver-x86_64-linux.tar.gz::$url/releases/download/v$pkgver/fjern-v$pkgver-x86_64-linux.tar.gz")
-# Finalized from the published v0.2.1 asset after the tag build completes.
-sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')
+depends=('brotli' 'gcc-libs' 'glibc' 'hicolor-icon-theme' 'libxkbcommon' 'openssl' 'wayland' 'zlib' 'zstd')
+source=("fjern-v$pkgver-$CARCH-linux.tar.gz::$url/releases/download/v$pkgver/fjern-v$pkgver-$CARCH-linux.tar.gz")
+sha256sums=('a07c6a70f7c2438efdc1efa77ccab7da352e8e612f9a462b7833228a84589e99')
 
 package() {
-  local bundle="$srcdir/fjern-v$pkgver-x86_64-linux"
+  local bundle="$srcdir/fjern-v$pkgver-$CARCH-linux"
   install -Dm755 "$bundle/fjern" "$pkgdir/usr/bin/fjern"
   install -Dm644 "$bundle/fjern.desktop" "$pkgdir/usr/share/applications/fjern.desktop"
   install -Dm644 "$bundle/fjern.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/fjern.svg"

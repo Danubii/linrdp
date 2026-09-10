@@ -23,7 +23,7 @@ jobs:
     container: archlinux:latest
     steps:
       - name: Install build and package tools
-        run: pacman -Syu --noconfirm base-devel brotli clang cmake git libx11 libxkbcommon namcap nasm openssl pkgconf python rustup wayland zlib zstd
+        run: pacman -Syu --noconfirm base-devel brotli clang cmake git hicolor-icon-theme libx11 libxkbcommon namcap nasm openssl pkgconf python rustup wayland zlib zstd
       - uses: actions/checkout@v4
       - name: Install stable Rust
         run: rustup toolchain install stable --profile minimal && rustup default stable
@@ -40,5 +40,7 @@ jobs:
           useradd --create-home builder
           chown -R builder:builder "$GITHUB_WORKSPACE"
           runuser -u builder -- bash -c 'cd "$1/packaging/arch" && SRCDEST="$1/dist" makepkg --clean --cleanbuild --force' _ "$GITHUB_WORKSPACE"
-          namcap packaging/arch/PKGBUILD
-          namcap packaging/arch/fjern-bin-*.pkg.tar.zst
+          namcap packaging/arch/PKGBUILD | tee namcap-recipe.log
+          namcap packaging/arch/fjern-bin-*.pkg.tar.zst | tee namcap-package.log
+          # namcap can report errors while returning success.
+          python3 -c 'from pathlib import Path; import sys; sys.exit(any(" E:" in Path(p).read_text() for p in ("namcap-recipe.log", "namcap-package.log")))'

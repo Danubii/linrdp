@@ -15,6 +15,7 @@ pkgbase = fjern-bin
 	depends = brotli
 	depends = gcc-libs
 	depends = glibc
+	depends = hicolor-icon-theme
 	depends = libxkbcommon
 	depends = openssl
 	depends = wayland
@@ -24,6 +25,6 @@ pkgbase = fjern-bin
 	conflicts = fjern
 	options = !debug
 	source = fjern-v0.2.1-x86_64-linux.tar.gz::https://github.com/zeq0r/fjern/releases/download/v0.2.1/fjern-v0.2.1-x86_64-linux.tar.gz
-	sha256sums = 0000000000000000000000000000000000000000000000000000000000000000
+	sha256sums = a07c6a70f7c2438efdc1efa77ccab7da352e8e612f9a462b7833228a84589e99
 
 pkgname = fjern-bin
