@@ -1,6 +1,6 @@
 # First-desktop viewer
 
-`linrdp connect <host> [port] --user <account> [trust-option]` performs TLS,
+`fjern connect <host> [port] --user <account> [trust-option]` performs TLS,
 NTLM CredSSP, MCS/GCC, Client Info, valid-client licensing, capabilities and
 activation, then opens a native desktop display. The password is prompted
 locally after certificate verification. Connection setup still starts from
@@ -20,11 +20,11 @@ within a bounded 16-million-pixel budget.
 
 Dynamic resolution is implemented for one monitor and defaults to on. Use
 `--dynamic-resolution on|off` to select it explicitly; `--size` still controls
-the initial connection dimensions. When enabled, LinRDP negotiates the Display
+the initial connection dimensions. When enabled, Fjern negotiates the Display
 Control dynamic virtual channel and, after an activated desktop has painted,
 coalesces window changes for 300 ms before requesting the latest size. Requests
 are limited to 200–8192 pixels per dimension, the server-advertised display area,
-and LinRDP's 16,777,216-pixel cap. Odd window widths round down to the even width
+and Fjern's 16,777,216-pixel cap. Odd window widths round down to the even width
 required by the protocol. Only one request is outstanding at a time.
 
 The centered, aspect-preserving local scaler remains active throughout. It is
@@ -82,7 +82,7 @@ compression remains disabled. Fast-path fragment reassembly is bounded to
 
 The viewer uses minifb for the native window and ironrdp-graphics exclusively for
 interleaved bitmap RLE decompression. RDP session sequencing, wire parsing,
-capability negotiation and compositing are implemented in LinRDP. These
+capability negotiation and compositing are implemented in Fjern. These
 libraries do not replace the protocol engine. Transitive dependencies may
 contain additional codecs/PDU types which this profile does not use.
 
@@ -131,7 +131,7 @@ A synthetic burst of 479 characters with effectively simultaneous press/release
 events lost characters in Windows Notepad despite matching outgoing event counts
 and a scancode-sequence checksum. FreeRDP reproduced losses with zero-dwell
 XTest input; a reference run with 5 ms between edges delivered the text. This
-does not establish a universal rate limit or rule out LinRDP timing issues.
+does not establish a universal rate limit or rule out Fjern timing issues.
 Very fast synthetic input remains outside the verified compatibility claim.
 
 Windows host checks verified Start-menu keyboard shortcuts, a correctly placed
@@ -149,7 +149,7 @@ Shift+Tab and releases after modifier changes. Character callbacks retain their
 effective symbols. A native XKB regression fails with the original lookup and
 passes with the correction. Windows Notepad also displayed `aA`, an actual Tab,
 and a following lowercase `b`, which were copied back and checked byte-for-byte.
-See [vendor patch](../vendor/minifb/LINRDP-PATCH.md).
+See [vendor patch](../vendor/minifb/FJERN-PATCH.md).
 
 ## Building on Linux
 

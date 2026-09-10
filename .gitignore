@@ -1,4 +1,9 @@
 /target/
+/dist/
+/packaging/arch/*.pkg.tar.zst
+/packaging/arch/*.pkg.tar.zst.sig
+/packaging/arch/src/
+/packaging/arch/pkg/
 *.rdp
 .env
 .env.*

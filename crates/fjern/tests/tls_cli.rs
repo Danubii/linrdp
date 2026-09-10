@@ -18,7 +18,7 @@ impl PemFile {
             .unwrap()
             .as_nanos();
         let path =
-            std::env::temp_dir().join(format!("linrdp-test-{}-{suffix}.pem", std::process::id()));
+            std::env::temp_dir().join(format!("fjern-test-{}-{suffix}.pem", std::process::id()));
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -118,7 +118,7 @@ fn trust_case(pinned: bool, trusted: bool) {
             }
         }
     });
-    let mut command = Command::new(env!("CARGO_BIN_EXE_linrdp"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fjern"));
     command.args(["tls", "127.0.0.1", &port.to_string()]);
     if pinned {
         command.args(["--cert-sha256", &pin]);
@@ -156,7 +156,7 @@ fn rejects_empty_and_malformed_trust_files_before_connecting() {
         "-----BEGIN CERTIFICATE-----\ninvalid!\n-----END CERTIFICATE-----\n",
     ] {
         let pem = PemFile::new(contents);
-        let output = Command::new(env!("CARGO_BIN_EXE_linrdp"))
+        let output = Command::new(env!("CARGO_BIN_EXE_fjern"))
             .args(["tls", "nonexistent.invalid", "--ca"])
             .arg(&pem.0)
             .output()

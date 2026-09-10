@@ -7,8 +7,8 @@ certificate configuration have not yet been recorded.
 
 | Check | Result |
 | --- | --- |
-| RDP negotiation (`linrdp probe`) | Exit 0; server selected CredSSP (NLA) with early authorization |
-| TLS using system trust (`linrdp tls`) | Exit 1; `invalid peer certificate: UnknownIssuer` |
+| RDP negotiation (`fjern probe`) | Exit 0; server selected CredSSP (NLA) with early authorization |
+| TLS using system trust (`fjern tls`) | Exit 1; `invalid peer certificate: UnknownIssuer` |
 | Credentials sent | None |
 | NLA authentication / desktop | Not implemented or tested |
 
@@ -21,10 +21,10 @@ or expiry would pass validation once its issuer is trusted.
 
 A separate Python/OpenSSL diagnostic retrieved the presented public certificate
 after RDP negotiation. Certificate verification was disabled only in that
-inspection process; no credentials or CredSSP messages were sent. The LinRDP
+inspection process; no credentials or CredSSP messages were sent. The Fjern
 client's verifier was not changed, and the certificate was not trusted or
 installed. The inspection negotiated TLS 1.3, which is not evidence of a
-verified LinRDP TLS connection.
+verified Fjern TLS connection.
 
 The presented certificate has matching subject/issuer common names, no X.509
 extensions (including no Subject Alternative Name), and a validity interval
@@ -48,14 +48,14 @@ installing certificates or persisting trust.
 
 | Check | Result |
 | --- | --- |
-| `linrdp tls <host> 3389 --cert-sha256 <selected-fingerprint>` | Exit 0 |
+| `fjern tls <host> 3389 --cert-sha256 <selected-fingerprint>` | Exit 0 |
 | RDP negotiation | CredSSP (NLA) with early authorization |
 | TLS | TLS 1.3, `TLS13_AES_256_GCM_SHA384` |
 | Verification | Exact leaf SHA-256 match, certificate validity, TLS handshake signature |
 | CA/SAN validation | Replaced by the explicit certificate pin |
 | Credentials sent | None |
 
-This establishes a working LinRDP TLS handshake with the host presenting the
+This establishes a working Fjern TLS handshake with the host presenting the
 selected certificate and proving possession of its private key. It does not
 establish independently confirmed host identity, NLA login or desktop support.
 Local validation also passed 42 tests, Clippy, formatting and a release build.
@@ -68,7 +68,7 @@ adds a real CredSSP request/response over TLS without attempting account login.
 
 | Check | Result |
 | --- | --- |
-| `linrdp nla-probe <host> 3389 --cert-sha256 <selected-fingerprint>` | Exit 0 |
+| `fjern nla-probe <host> 3389 --cert-sha256 <selected-fingerprint>` | Exit 0 |
 | TLS | TLS 1.3, `TLS13_AES_256_GCM_SHA384` |
 | CredSSP | Server version 6 |
 | NTLM | Type 2 challenge received after the credential-free Type 1 token |
@@ -188,7 +188,7 @@ from the repository; certificate-pin provenance remains as described above.
 | MCS/GCC and mandatory channel joins | Succeeded |
 | Client Info / valid-client licensing | Accepted |
 | Demand Active / Confirm Active / synchronization / control / Font Map | Completed |
-| First bitmap | Displayed in the native LinRDP window |
+| First bitmap | Displayed in the native Fjern window |
 | Negotiated display | 1024×768, 16-bit RGB565 |
 | Output profile | Fast-path bitmap updates, interleaved RLE enabled, bulk compression disabled |
 | Visual inspection | Actual Windows wallpaper, desktop icons and taskbar |
@@ -200,9 +200,9 @@ from the repository; certificate-pin provenance remains as described above.
 A slow-path-only activation initially produced no image. A temporary FreeRDP
 3.30.0 reference client displayed the desktop with its default fast-path
 settings; a configuration disabling both fast-path input and output was black.
-Enabling fast-path **output** in LinRDP resolved the first-image failure while
+Enabling fast-path **output** in Fjern resolved the first-image failure while
 leaving its input transport unchanged. The reference client is not a project
-runtime dependency and was not used to render LinRDP's verified image.
+runtime dependency and was not used to render Fjern's verified image.
 
 The viewer closes the connection without sending logoff. This test does not
 establish automatic reconnection, application-state persistence, Linux-server
@@ -222,7 +222,7 @@ The initial US keyboard profile and 1024×768 RGB565 desktop remained unchanged.
 | Ctrl+Escape / Escape | Opened and dismissed the Windows Start menu |
 | Mouse position and left click | Clicked the Start button in a centered, scaled viewport |
 | Short keyboard events | Complete `notepad` search text arrived after switching to ordered callbacks |
-| Text entry | `linrdp input test 123` appeared in a new Notepad document |
+| Text entry | `fjern input test 123` appeared in a new Notepad document |
 | Focus loss with Shift held | Focus moved to another local window before Shift release; subsequent `a` arrived lowercase |
 | Normal viewer close | Exit status 0; no logoff requested |
 | Local validation | 87 tests, formatting, Clippy with warnings denied, locked release build |
@@ -252,7 +252,7 @@ A FreeRDP 3.30.0 reference run also lost characters with zero-dwell XTest events
 edges delivered the 479-character sequence. The reference required XTest rather
 than wtype because its X11 physical-key mapping interpreted wtype's temporary
 keymap differently. This narrows the evidence to this host/application/test
-method; it does not prove a Windows-wide limit or exclude LinRDP timing issues.
+method; it does not prove a Windows-wide limit or exclude Fjern timing issues.
 Rapid synthetic bursts remain a documented compatibility limitation.
 
 A follow-up corrected outgoing Share Data `uncompressedLength` to the payload

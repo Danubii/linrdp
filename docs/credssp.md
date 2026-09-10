@@ -6,10 +6,10 @@ TLS binding and credential delegation once. Neither starts a desktop session.
 
 ## Authentication boundary
 
-LinRDP owns RDP negotiation, TSRequest framing, phase validation, TLS trust,
+Fjern owns RDP negotiation, TSRequest framing, phase validation, TLS trust,
 public-key binding, credential encoding and transport deadlines. The MIT/Apache
 licensed `sspi-rs` provider handles NTLMv2 tokens and signing/sealing. It does not
-replace LinRDP's RDP engine or CredSSP state machine.
+replace Fjern's RDP engine or CredSSP state machine.
 
 This first path uses raw NTLM tokens, permitted by MS-CSSP. It does not implement
 SPNEGO negotiation, Kerberos, UPN accounts, smartcards, Entra ID, Remote Credential
@@ -50,7 +50,7 @@ messages. Each network read/write phase has a five-second deadline. Password
 entry and local cryptographic computation are outside those deadlines. No
 application-level automatic authentication retries occur.
 
-Password/credential buffers owned by LinRDP use `Secret` or `Zeroizing`, and
+Password/credential buffers owned by Fjern use `Secret` or `Zeroizing`, and
 credential DER is encoded into preallocated zeroizing buffers. No diagnostic
 logging subscriber is installed: provider trace events can contain sensitive
 buffers and must not be enabled without a separate redaction review. This is

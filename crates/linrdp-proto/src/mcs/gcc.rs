@@ -25,7 +25,7 @@ pub(super) fn request(settings: Settings, protocol: SecurityProtocol) -> Vec<u8>
     core[12..16].copy_from_slice(&[1, 0xca, 3, 0xaa]);
     core[16..20].copy_from_slice(&settings.keyboard_layout.to_le_bytes());
     core[20..24].copy_from_slice(&1u32.to_le_bytes());
-    for (i, ch) in "LinRDP".encode_utf16().enumerate() {
+    for (i, ch) in "Fjern".encode_utf16().enumerate() {
         core[24 + 2 * i..26 + 2 * i].copy_from_slice(&ch.to_le_bytes());
     }
     core[56..60].copy_from_slice(&4u32.to_le_bytes()); // enhanced keyboard

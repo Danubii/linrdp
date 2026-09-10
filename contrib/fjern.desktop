@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Fjern
+Comment=Native remote desktop client for RDP and VNC
+Exec=fjern
+Icon=fjern
+Terminal=true
+Categories=Network;RemoteAccess;
+Keywords=RDP;VNC;Remote Desktop;Wayland;Omarchy;

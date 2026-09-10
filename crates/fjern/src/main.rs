@@ -1,4 +1,5 @@
 mod clipboard;
+mod config;
 mod credentials;
 mod nla;
 mod ntlm;
@@ -19,18 +20,18 @@ use std::time::{Duration, Instant};
 use linrdp_proto::negotiation::{PROBE_REQUEST, Response, confirm_length, decode_confirm};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
-const HELP: &str = "LinRDP — early development
+const HELP: &str = "Fjern — early development
 
-Usage: linrdp probe <host> [port]
-       linrdp tls <host> [port] [trust-option]
-       linrdp nla-probe <host> [port] [trust-option]
-       linrdp login <host> [port] --user <username|DOMAIN\\username> [trust-option]
-       linrdp session-probe <host> [port] --user <username> [trust-option]
-       linrdp connect <host> [port] --user <username> [trust-option] [--size WIDTHxHEIGHT] [--dynamic-resolution on|off] [--clipboard on|off] [--graphics bitmap|h264]
-       linrdp vnc <host> [port] [--user <username>]
-       linrdp tui
-       linrdp --help
-       linrdp --version
+Usage: fjern probe <host> [port]
+       fjern tls <host> [port] [trust-option]
+       fjern nla-probe <host> [port] [trust-option]
+       fjern login <host> [port] --user <username|DOMAIN\\username> [trust-option]
+       fjern session-probe <host> [port] --user <username> [trust-option]
+       fjern connect <host> [port] --user <username> [trust-option] [--size WIDTHxHEIGHT] [--dynamic-resolution on|off] [--clipboard on|off] [--graphics bitmap|h264]
+       fjern vnc <host> [port] [--user <username>]
+       fjern tui
+       fjern --help
+       fjern --version
 
 Trust: --ca <pem-file> OR --cert-sha256 <fingerprint>; defaults to system trust.
 Use an unbracketed IPv6 address with the port as a separate argument.
@@ -47,6 +48,9 @@ later window resizing uses Display Control when the server makes it available,
 with local scaling as the fallback. Only one monitor is supported.";
 
 fn main() -> ExitCode {
+    if let Err(error) = config::migrate_legacy() {
+        eprintln!("fjern: legacy configuration was not migrated: {error}");
+    }
     let args: Vec<_> = std::env::args().skip(1).collect();
     let wants_tui = starts_tui(&args, tui::interactive_terminal());
     let result = if wants_tui {
@@ -61,7 +65,7 @@ fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("linrdp: {error}");
+            eprintln!("fjern: {error}");
             ExitCode::FAILURE
         }
     }
@@ -254,7 +258,7 @@ fn run_with_tls_hook(
         return Ok(());
     }
     if matches!(args.as_slice(), [flag] if flag == "--version" || flag == "-V") {
-        println!("linrdp {}", env!("CARGO_PKG_VERSION"));
+        println!("fjern {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
     let options = Options::parse(&args)?;

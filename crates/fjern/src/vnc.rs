@@ -26,8 +26,8 @@ impl HyprlandCapture {
         let runtime = env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)?;
         let pid = std::process::id();
         Some(Self {
-            token: runtime.join(format!("linrdp-keyboard-capture-{pid}")),
-            submap: format!("linrdp_capture_{pid}"),
+            token: runtime.join(format!("fjern-keyboard-capture-{pid}")),
+            submap: format!("fjern_capture_{pid}"),
             installed: false,
         })
     }
@@ -639,7 +639,7 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
             return Err(invalid("VNC server did not provide a desktop size"));
         }
         let mut window = Window::new(
-            "LinRDP — VNC",
+            "Fjern — VNC",
             canvas.width,
             canvas.height,
             WindowOptions {
@@ -651,7 +651,7 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
         window.set_target_fps(120);
         let keyboard = Arc::new(Mutex::new(Keyboard::default()));
         window.set_input_callback(Box::new(Callback(keyboard.clone())));
-        window.set_title("LinRDP — VNC — Ctrl+Alt+Shift+Esc captures keyboard");
+        window.set_title("Fjern — VNC — Ctrl+Alt+Shift+Esc captures keyboard");
         let clipboard = crate::clipboard::native::Native::new();
         let mut clipboard_generation = 0u64;
         let mut mask = 0u8;
@@ -698,6 +698,9 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                             }
                             VncEvent::DesktopResizeRejected { reason, status } => eprintln!(
                                 "VNC: server rejected desktop resize (reason {reason}, status {status})."
+                            ),
+                            VncEvent::DesktopResizePending { reason } => eprintln!(
+                                "VNC: server forwarded desktop resize (reason {reason}); waiting for the new layout."
                             ),
                             VncEvent::Text(text) => {
                                 clipboard_generation = clipboard_generation.wrapping_add(1);
@@ -816,7 +819,7 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                 if let Some(capture) = &mut hyprland_capture {
                     capture.deactivate();
                 }
-                window.set_title("LinRDP — VNC — Ctrl+Alt+Shift+Esc captures keyboard");
+                window.set_title("Fjern — VNC — Ctrl+Alt+Shift+Esc captures keyboard");
                 eprintln!("VNC: keyboard capture released by Hyprland shortcut.");
             }
             let toggle_requested = (callback_toggle || capture_toggle_down)
@@ -845,12 +848,12 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                         if grabbed { "requested" } else { "released" }
                     );
                     window.set_title(if grabbed {
-                        "LinRDP — VNC — requesting keyboard capture…"
+                        "Fjern — VNC — requesting keyboard capture…"
                     } else {
-                        "LinRDP — VNC — Ctrl+Alt+Shift+Esc captures keyboard"
+                        "Fjern — VNC — Ctrl+Alt+Shift+Esc captures keyboard"
                     });
                 } else {
-                    window.set_title("LinRDP — VNC — keyboard capture unavailable");
+                    window.set_title("Fjern — VNC — keyboard capture unavailable");
                 }
             }
             if let Some(inhibited) = window.keyboard_shortcuts_inhibited()
@@ -866,11 +869,11 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                     }
                 );
                 window.set_title(if inhibited {
-                    "LinRDP — VNC — keyboard captured; Ctrl+Alt+Shift+Esc toggles"
+                    "Fjern — VNC — keyboard captured; Ctrl+Alt+Shift+Esc toggles"
                 } else if capture_requested {
-                    "LinRDP — VNC — waiting for keyboard capture…"
+                    "Fjern — VNC — waiting for keyboard capture…"
                 } else {
-                    "LinRDP — VNC — Ctrl+Alt+Shift+Esc captures keyboard"
+                    "Fjern — VNC — Ctrl+Alt+Shift+Esc captures keyboard"
                 });
             }
             for event in events {

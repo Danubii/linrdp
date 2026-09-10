@@ -80,7 +80,7 @@ pub fn run(
     let (initial_width, initial_height) =
         (usize::from(settings.width), usize::from(settings.height));
     let mut window = Window::new(
-        "LinRDP — Connecting",
+        "Fjern — Connecting",
         initial_width,
         initial_height,
         WindowOptions {
@@ -156,7 +156,7 @@ pub fn run(
                         return Err(error.clone().into());
                     }
                     if revision == 0 {
-                        window.set_title(&format!("LinRDP — {}", frame.status));
+                        window.set_title(&format!("Fjern — {}", frame.status));
                     }
                     if frame.revision != revision {
                         frame.take_pixels(&mut pixels);
@@ -164,7 +164,7 @@ pub fn run(
                         height = frame.height;
                         revision = frame.revision;
                         if !shown || (width, height) != rendered_remote {
-                            window.set_title(&format!("LinRDP — {host} — {width}×{height}"));
+                            window.set_title(&format!("Fjern — {host} — {width}×{height}"));
                         }
                     }
                     ready = frame.active && revision != 0;

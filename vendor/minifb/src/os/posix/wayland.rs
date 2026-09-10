@@ -1309,7 +1309,7 @@ impl Window {
     ) -> Result<()> {
         check_buffer_size(buffer, buf_width, buf_height, buf_stride)?;
 
-        // LinRDP already supplies window-sized pixels, including letterboxing.
+        // Fjern already supplies window-sized pixels, including letterboxing.
         // Submit packed, native-sized input directly instead of resampling and
         // copying every pixel through an intermediate buffer a second time.
         let native = buf_width == self.width as usize
@@ -1438,7 +1438,7 @@ impl Drop for Window {
 }
 
 #[cfg(test)]
-mod linrdp_buffer_tests {
+mod fjern_buffer_tests {
     use super::*;
 
     #[test]
@@ -1461,7 +1461,7 @@ mod linrdp_buffer_tests {
     #[ignore = "opens a small native Wayland window; requires a running compositor"]
     fn native_sized_submission_bypasses_scaler_and_preserves_pixels() {
         use std::os::unix::fs::FileExt;
-        let mut window = Window::new("LinRDP native submission test", 64, 64, WindowOptions::default()).unwrap();
+        let mut window = Window::new("Fjern native submission test", 64, 64, WindowOptions::default()).unwrap();
         let pixels: Vec<u32> = (0..64 * 64).map(|i| 0x123400 + i).collect();
         let scratch = window.buffer.clone();
         window.update_with_buffer_stride(&pixels, 64, 64, 64).unwrap();
@@ -1484,7 +1484,7 @@ mod linrdp_buffer_tests {
     #[ignore = "opens a small native Wayland window; requires a running compositor"]
     fn native_wayland_busy_pool_retries_final_image() {
         use std::time::{Duration, Instant};
-        let mut window = Window::new("LinRDP buffer lifecycle test", 64, 64, WindowOptions::default()).unwrap();
+        let mut window = Window::new("Fjern buffer lifecycle test", 64, 64, WindowOptions::default()).unwrap();
         let mut pixels = vec![0x123456; 64 * 64];
         // Deliberately do not dispatch releases: allocation must stop at three.
         for _ in 0..8 {
@@ -1536,7 +1536,7 @@ mod linrdp_buffer_tests {
 }
 
 #[cfg(test)]
-mod linrdp_keyboard_tests {
+mod fjern_keyboard_tests {
     use super::*;
     use std::{cell::RefCell, rc::Rc};
     struct Capture(Rc<RefCell<Vec<(Key, bool)>>>);

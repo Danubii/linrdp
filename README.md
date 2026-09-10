@@ -1,8 +1,15 @@
-# LinRDP
+# Fjern
 
-A simple native Linux remote-desktop client: enter a computer address, connect,
-and get to work. Think VLC for remote desktops. Open source from the first
-commit.
+Native remote desktop for Linux.
+
+RDP and VNC. Wayland first. Developed first for Omarchy.
+
+Fjern is a native Linux remote-desktop client for RDP and VNC. It is developed
+first for Omarchy and Hyprland, with native Wayland behavior, compositor
+shortcut capture, dynamic resolution, clipboard integration and a small
+keyboard-first connection interface.
+
+Fjern is an independent project and is not an official Omarchy component.
 
 **Early development. RDP against Windows and VNC against WayVNC are working and
 tested on real hosts.**
@@ -10,11 +17,11 @@ tested on real hosts.**
 We are building our own RDP engine in Rust, interoperating with existing
 Windows and Linux RDP servers. This project contains only a client.
 
-LinRDP is developed first for [Omarchy](https://omarchy.org/) and its
+Fjern is developed first for [Omarchy](https://omarchy.org/) and its
 Wayland/Hyprland desktop. Native windows, compositor shortcut capture, dynamic
 resolution, clipboard integration and packaging are designed and tested with
 that environment as the primary Linux target. Other Wayland desktops and X11
-remain compatibility targets. LinRDP is an independent project and is not an
+remain compatibility targets. Fjern is an independent project and is not an
 official Omarchy component.
 
 ## Direction
@@ -32,8 +39,8 @@ not a compatibility claim or a guarantee. Latency and frame pacing matter too.
 
 ## First-desktop viewer
 
-Running `linrdp` with no arguments in an interactive terminal opens a compact,
-keyboard-first connection screen. `linrdp tui` opens it explicitly. Enter a
+Running `fjern` with no arguments in an interactive terminal opens a compact,
+keyboard-first connection screen. `fjern tui` opens it explicitly. Enter a
 Computer and User, connect, or manage saved non-secret profiles; Options exposes
 port, initial size, dynamic resolution, clipboard, and certificate trust. Direct
 CLI commands remain available, and noninteractive no-argument use still prints
@@ -43,12 +50,12 @@ or save that exact trust decision. See
 [terminal UI, trust, profile storage, and launcher installation](docs/terminal-ui.md).
 
 ```sh
-cargo run --release -p linrdp -- connect my-computer.example --user 'MACHINE\tester' --ca /path/to/lab-ca.pem
+cargo run --release -p fjern -- connect my-computer.example --user 'MACHINE\tester' --ca /path/to/lab-ca.pem
 ```
 
 Use the same explicit certificate-pin option as the diagnostics when appropriate.
 Use `--size 1920x1080` to select the initial resolution (default 1024×768,
-32-bit color). LinRDP requests Windows font smoothing and desktop composition
+32-bit color). Fjern requests Windows font smoothing and desktop composition
 to preserve ClearType text. Dynamic resolution is implemented and enabled by default; use
 `--dynamic-resolution off` to retain local scaling only. After the initial
 connection, a window resize requests a matching remote resolution through the
@@ -83,9 +90,9 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 The first development tool performs the initial RDP security negotiation:
 
 ```sh
-cargo run -p linrdp -- probe 192.0.2.10
-cargo run -p linrdp -- probe my-computer.example 3389
-cargo run -p linrdp -- probe ::1 3389
+cargo run -p fjern -- probe 192.0.2.10
+cargo run -p fjern -- probe my-computer.example 3389
+cargo run -p fjern -- probe ::1 3389
 ```
 
 Replace the example address with your RDP host. This sends one negotiation
@@ -98,8 +105,8 @@ deadline. System DNS resolution is outside these deadlines.
 To perform TLS and verify the server certificate after RDP negotiation:
 
 ```sh
-cargo run -p linrdp -- tls my-computer.example
-cargo run -p linrdp -- tls my-computer.example 3389 --ca /path/to/lab-ca.pem
+cargo run -p fjern -- tls my-computer.example
+cargo run -p fjern -- tls my-computer.example 3389 --ca /path/to/lab-ca.pem
 ```
 
 The `tls` command uses system trust roots by default. `--ca` replaces them with
@@ -136,8 +143,8 @@ See the [changelog](CHANGELOG.md), [architecture](docs/architecture.md), [roadma
 ## Experimental NLA diagnostics
 
 ```sh
-cargo run -p linrdp -- nla-probe my-computer.example --ca /path/to/lab-ca.pem
-cargo run -p linrdp -- login my-computer.example --user 'MACHINE\tester' --ca /path/to/lab-ca.pem
+cargo run -p fjern -- nla-probe my-computer.example --ca /path/to/lab-ca.pem
+cargo run -p fjern -- login my-computer.example --user 'MACHINE\tester' --ca /path/to/lab-ca.pem
 ```
 
 Use `--cert-sha256 <fingerprint>` instead of `--ca` for an explicitly approved
@@ -160,7 +167,7 @@ See the [Windows test report](docs/windows-first-probe.md),
 ### Session setup diagnostic
 
 ```sh
-cargo run -p linrdp -- session-probe my-computer.example --user 'MACHINE\tester' --ca /path/to/lab-ca.pem
+cargo run -p fjern -- session-probe my-computer.example --user 'MACHINE\tester' --ca /path/to/lab-ca.pem
 ```
 
 This performs the same one-attempt login as `login`, then exchanges MCS/GCC
@@ -174,7 +181,7 @@ See [session behavior](docs/sessions.md) and [MCS/GCC scope](docs/mcs.md).
 
 ## VNC and WayVNC
 
-[VNC connections](docs/vnc.md) are available through `linrdp vnc` or the
+[VNC connections](docs/vnc.md) are available through `fjern vnc` or the
 RDP/VNC selector in the TUI. The client supports VeNCrypt, saved certificate
 trust, ZRLE/Raw/CopyRect graphics, server resizing, keyboard capture, pointer
 input, scrolling and bidirectional text clipboard. The local client cursor

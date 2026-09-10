@@ -1,0 +1,28 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  linux-x86_64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - run: cargo +stable fmt --all --check
+      - run: cargo +stable clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo +stable test --workspace --locked
+      - run: cargo +stable build --workspace --release --locked
+      - name: Bundle release
+        run: tools/package-release.sh "$GITHUB_REF_NAME" x86_64-linux .
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            fjern-${{ github.ref_name }}-x86_64-linux.tar.gz
+            fjern-${{ github.ref_name }}-x86_64-linux.tar.gz.sha256
+          fail_on_unmatched_files: true

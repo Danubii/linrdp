@@ -158,7 +158,7 @@ impl Download {
     pub fn new(files: Vec<FileDescriptor>) -> Result<Self> {
         let dir = Arc::new(
             tempfile::Builder::new()
-                .prefix("linrdp-clipboard-")
+                .prefix("fjern-clipboard-")
                 .tempdir()?,
         );
         let mut roots = BTreeSet::new();

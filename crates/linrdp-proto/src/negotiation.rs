@@ -50,7 +50,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::VncServer => f.write_str("the server speaks VNC (RFB), not RDP. Select VNC in the connection screen or use linrdp vnc <host> [port]"),
+            Self::VncServer => f.write_str("the server speaks VNC (RFB), not RDP. Select VNC in the connection screen or use fjern vnc <host> [port]"),
             Self::Malformed(reason) => write!(f, "invalid RDP negotiation: {reason}"),
             Self::LegacySecurity => {
                 f.write_str("server selected legacy RDP security; refusing downgrade")
@@ -242,7 +242,7 @@ mod service_detection_tests {
     #[test]
     fn vnc_banner_has_an_actionable_error() {
         assert_eq!(confirm_length(*b"RFB "), Err(Error::VncServer));
-        assert!(Error::VncServer.to_string().contains("linrdp vnc"));
+        assert!(Error::VncServer.to_string().contains("fjern vnc"));
         assert!(matches!(confirm_length(*b"HTTP"), Err(Error::Malformed(_))));
     }
 }

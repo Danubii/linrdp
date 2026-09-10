@@ -776,11 +776,11 @@ impl App {
         if width < MIN_WIDTH || height < MIN_HEIGHT {
             queue!(
                 out,
-                Print("LinRDP needs a terminal at least 80×24. Resize or press Esc.")
+                Print("Fjern needs a terminal at least 80×24. Resize or press Esc.")
             )?;
             return out.flush();
         }
-        line(out, 2, 1, "LinRDP  Remote Desktop Connection", true)?;
+        line(out, 2, 1, "Fjern  Remote Desktop Connection", true)?;
         line(
             out,
             2,

@@ -1,11 +1,11 @@
 # Terminal connection screen
 
-Run `linrdp` with no arguments in an interactive terminal, or run `linrdp tui`
+Run `fjern` with no arguments in an interactive terminal, or run `fjern tui`
 explicitly, to open the terminal connection screen. With redirected input or
 output, no arguments continue to print command-line help. Existing commands such
-as `linrdp connect` remain available for scripts and direct use.
+as `fjern connect` remain available for scripts and direct use.
 
-When running from the repository, use `cargo run --release -p linrdp -- tui`
+When running from the repository, use `cargo run --release -p fjern -- tui`
 for desktop sessions so decoding and rendering use compiler optimizations.
 
 The screen follows the familiar Remote Desktop Connection order: saved profile,
@@ -35,12 +35,12 @@ or the desktop session to finish.
 Expiry, invalid signatures, network errors and authentication errors never open
 the approval dialog. Explicit `--ca` and `--cert-sha256` connections remain
 strict and never fall back to discovery. A saved certificate mismatch also stops
-with an error: LinRDP does not silently replace the pin or prompt to renew it.
+with an error: Fjern does not silently replace the pin or prompt to renew it.
 The noninteractive CLI never performs certificate discovery or trust prompting.
 
 Approved certificates are stored separately in
-`$XDG_CONFIG_HOME/linrdp/known_hosts.json`, falling back to
-`$HOME/.config/linrdp/known_hosts.json`. Each pin applies only to its host and
+`$XDG_CONFIG_HOME/fjern/known_hosts.json`, falling back to
+`$HOME/.config/fjern/known_hosts.json`. Each pin applies only to its host and
 port. The directory uses mode 0700 and files use mode 0600; updates are locked
 and atomic. Invalid trust data produces an error instead of being reset.
 
@@ -48,15 +48,15 @@ Enter on a saved connection loads it for editing and changes Save to Update.
 Update writes changes directly to that profile. Save as creates and selects a
 separate copy, New starts a clean connection, and Delete always asks for
 confirmation. The `>` marker identifies the profile currently being edited.
-After a connection closes or fails, LinRDP restores the terminal
+After a connection closes or fails, Fjern restores the terminal
 screen and returns to the connection screen with the result. The terminal is
 restored before the hidden password prompt, network connection, or desktop
 window starts.
 
-Profiles contain connection settings only. LinRDP never saves passwords. It
+Profiles contain connection settings only. Fjern never saves passwords. It
 stores at most 100 validated profiles in
-`$XDG_CONFIG_HOME/linrdp/profiles.json`, or
-`$HOME/.config/linrdp/profiles.json` when `XDG_CONFIG_HOME` is unset. The
+`$XDG_CONFIG_HOME/fjern/profiles.json`, or
+`$HOME/.config/fjern/profiles.json` when `XDG_CONFIG_HOME` is unset. The
 directory and file use private permissions. Updates use a temporary file in the
 same directory, flush it, and atomically replace the profile file. A missing file
 means there are no saved connections; malformed, oversized, duplicate, or
@@ -68,16 +68,16 @@ palette without changing user configuration.
 
 ## Application launcher
 
-The repository includes [`contrib/linrdp.desktop`](../contrib/linrdp.desktop).
-After installing the `linrdp` executable somewhere on `PATH`, install the
+The repository includes [`contrib/fjern.desktop`](../contrib/fjern.desktop).
+After installing the `fjern` executable somewhere on `PATH`, install the
 launcher for the current user with:
 
 ```sh
-install -Dm644 contrib/linrdp.desktop \
-  "$HOME/.local/share/applications/linrdp.desktop"
+install -Dm644 contrib/fjern.desktop \
+  "$HOME/.local/share/applications/fjern.desktop"
 ```
 
-The launcher uses `Terminal=true` and `Exec=linrdp tui`, so desktop launchers,
+The launcher uses `Terminal=true` and `Exec=fjern tui`, so desktop launchers,
 including Omarchy's launcher, start the terminal connection screen. This is an
 optional user action; the project does not modify desktop configuration or
 install system files automatically. The remote desktop uses an ordinary native

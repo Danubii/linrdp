@@ -792,6 +792,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 
 [[package]]
+name = "fjern"
+version = "0.2.0"
+dependencies = [
+ "cap-std",
+ "crossterm",
+ "der 0.7.10",
+ "libc",
+ "linrdp-proto",
+ "minifb",
+ "openssl",
+ "raw-window-handle",
+ "rcgen",
+ "ring",
+ "rpassword",
+ "rustix",
+ "rustls",
+ "rustls-native-certs",
+ "serde",
+ "serde_json",
+ "sspi",
+ "tempfile",
+ "tokio",
+ "tokio-openssl",
+ "unicode-width",
+ "url",
+ "vnc-rs",
+ "wl-clipboard-rs",
+ "x509-cert",
+ "zeroize",
+]
+
+[[package]]
 name = "flagset"
 version = "0.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1444,40 +1476,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "linrdp"
-version = "0.1.0"
-dependencies = [
- "cap-std",
- "crossterm",
- "der 0.7.10",
- "libc",
- "linrdp-proto",
- "minifb",
- "openssl",
- "raw-window-handle",
- "rcgen",
- "ring",
- "rpassword",
- "rustix",
- "rustls",
- "rustls-native-certs",
- "serde",
- "serde_json",
- "sspi",
- "tempfile",
- "tokio",
- "tokio-openssl",
- "unicode-width",
- "url",
- "vnc-rs",
- "wl-clipboard-rs",
- "x509-cert",
- "zeroize",
-]
-
-[[package]]
 name = "linrdp-proto"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "der 0.7.10",
  "ironrdp-core",

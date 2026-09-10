@@ -1,4 +1,4 @@
-# LinRDP vendor patch
+# Fjern vendor patch
 
 Source: minifb 0.28.0 from crates.io, https://github.com/emoon/rust_minifb.
 The upstream MIT and Apache-2.0 license files are retained.
@@ -12,7 +12,7 @@ separate. No compositor configuration is changed.
 
 The Wayland and X11 backends also retain native left, middle and right mouse
 button down/up events in a bounded 192-edge queue, including short clicks or
-double-click sequences completed between application render frames. LinRDP
+double-click sequences completed between application render frames. Fjern
 drains those ordered edges when polling input. Queue overflow is reported so the
 session fails rather than silently losing a press or release. This behavior has
 local regression coverage; an actual Windows GUI double-click has not yet been
@@ -33,13 +33,13 @@ until the latest image is submitted, including a final static frame.
 Aspect-preserving POSIX scaling now uses bilinear interpolation instead of the
 previous nearest-neighbor implementation, which keeps text edges readable when
 a fixed remote framebuffer must be reduced. The Wayland backend also exposes
-the standard keyboard-shortcuts-inhibit protocol. LinRDP uses it only after an
+the standard keyboard-shortcuts-inhibit protocol. Fjern uses it only after an
 explicit local capture chord and retains a separate local release chord.
 
 Run the bounded-pool unit test with:
 
 ```sh
-cargo test --manifest-path vendor/minifb/Cargo.toml --locked --lib linrdp_buffer_tests
+cargo test --manifest-path vendor/minifb/Cargo.toml --locked --lib fjern_buffer_tests
 ```
 
 An additional ignored test opens a small Wayland window and checks actual
@@ -50,7 +50,7 @@ a display server. It covers Shift+letter, Shift+Tab, shifted digits and modifier
 changes between press and release. Run:
 
 ```sh
-cargo test --manifest-path vendor/minifb/Cargo.toml --locked --lib linrdp_keyboard_tests
+cargo test --manifest-path vendor/minifb/Cargo.toml --locked --lib fjern_keyboard_tests
 ```
 
 This is a targeted compatibility patch, not a complete physical-key or
