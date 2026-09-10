@@ -4,6 +4,9 @@ All notable user-facing changes are documented here.
 
 ## Unreleased
 
+- VNC batches event processing inside one async runtime call per UI tick and
+  converts pixel rows through bounded slices to reduce per-pixel indexing work.
+
 - VNC consumes queued image tiles within a 4 ms UI work budget instead of
   stopping after 64 events, reducing backlog for large ZRLE updates.
 - VNC CopyRect applies overlapping moves directly in the framebuffer without

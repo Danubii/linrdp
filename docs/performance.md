@@ -29,6 +29,22 @@ network transfer, decoding and compositor timing still affect the visible
 result. CopyRect improvements apply only when the server sends CopyRect.
 The existing 16 ms incremental refresh request cadence is unchanged.
 
+Event processing enters the async runtime once per UI tick instead of once per
+tile. The event count and time limits still apply, and cursor refresh requests
+are awaited within the same runtime call.
+
+Pixel conversion uses a bounded destination row and paired source/destination
+iterators. A separate 1080p CPU benchmark measured 0.520 → 0.479 ms for 64-pixel
+row segments and 0.380 → 0.324 ms for full-width rows. These are isolated
+conversion costs, excluding allocation, transport, decoding and display. The
+benchmark alternates old/new order across six batches of 100 images and checks
+identical output. A regression checks nonzero tile offsets, untouched borders,
+odd row widths and removal of the unused high byte. Reproduce with:
+
+```sh
+cargo test --release -p fjern benchmark_vnc_unpack_pixels --locked -- --ignored --nocapture
+```
+
 ## RDP presentation
 
 The default profile negotiates RGB565 bitmap updates with interleaved RLE and

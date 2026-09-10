@@ -98,6 +98,13 @@ struct Canvas {
     height: usize,
     pixels: Vec<u32>,
 }
+
+fn unpack_pixels(dst: &mut [u32], bytes: &[u8]) {
+    for (pixel, bytes) in dst.iter_mut().zip(bytes.as_chunks::<4>().0) {
+        *pixel = u32::from_le_bytes(*bytes) & 0xffffff;
+    }
+}
+
 impl Canvas {
     fn resize(&mut self, w: usize, h: usize) -> Result<()> {
         if w == 0 || h == 0 || w > 8192 || h > 8192 || w * h > MAX_PIXELS {
@@ -129,9 +136,7 @@ impl Canvas {
                 }
                 for (row, bytes) in data.chunks(usize::from(r.width) * 4).enumerate() {
                     let dst = (usize::from(r.y) + row) * self.width + usize::from(r.x);
-                    for (i, p) in bytes.as_chunks::<4>().0.iter().enumerate() {
-                        self.pixels[dst + i] = u32::from_le_bytes(*p) & 0xffffff;
-                    }
+                    unpack_pixels(&mut self.pixels[dst..dst + usize::from(r.width)], bytes);
                 }
             }
             VncEvent::Copy(dst, src) => {
@@ -681,8 +686,9 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
         let mut hyprland_capture = HyprlandCapture::new();
         while window.is_open() {
             let events_started = Instant::now();
+            runtime.block_on(async {
             for _ in 0..MAX_EVENTS_PER_TICK {
-                match runtime.block_on(client.poll_event())? {
+                match client.poll_event().await? {
                     Some(event) => {
                         match &event {
                             VncEvent::ExtendedKeyEventAvailable => {
@@ -730,7 +736,7 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                                 // The first framebuffer may still contain the
                                 // previously server-rendered pointer. Repaint it
                                 // once cursor-shape mode has taken effect.
-                                runtime.block_on(client.input(X11Event::FullRefresh))?;
+                                client.input(X11Event::FullRefresh).await?;
                                 eprintln!(
                                     "VNC: server cursor removed; local client cursor remains visible."
                                 );
@@ -745,6 +751,8 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                     None => break,
                 }
             }
+            Ok::<(), Box<dyn Error>>(())
+            })?;
             let size = window.get_size();
             if size != observed_window_size {
                 observed_window_size = size;
@@ -960,6 +968,87 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn raw_tiles_preserve_borders_and_mask_padding() {
+        let mut canvas = Canvas {
+            width: 9,
+            height: 5,
+            pixels: vec![0xabcdef; 45],
+        };
+        let bytes: Vec<u8> = (0..21u32)
+            .flat_map(|n| (0xff000000 | (n * 0x010203)).to_le_bytes())
+            .collect();
+        canvas
+            .event(VncEvent::RawImage(
+                Rect {
+                    x: 1,
+                    y: 1,
+                    width: 7,
+                    height: 3,
+                },
+                bytes,
+            ))
+            .unwrap();
+        for y in 0..5 {
+            for x in 0..9 {
+                let expected = if (1..4).contains(&y) && (1..8).contains(&x) {
+                    ((y - 1) * 7 + x - 1) as u32 * 0x010203
+                } else {
+                    0xabcdef
+                };
+                assert_eq!(canvas.pixels[y * 9 + x], expected);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "CPU benchmark; run in release mode"]
+    fn benchmark_vnc_unpack_pixels() {
+        use std::hint::black_box;
+        #[inline(never)]
+        fn previous(pixels: &mut [u32], offset: usize, bytes: &[u8]) {
+            for (i, p) in bytes.as_chunks::<4>().0.iter().enumerate() {
+                pixels[offset + i] = u32::from_le_bytes(*p) & 0xffffff;
+            }
+        }
+        #[inline(never)]
+        fn optimized(pixels: &mut [u32], offset: usize, bytes: &[u8]) {
+            unpack_pixels(&mut pixels[offset..offset + bytes.len() / 4], bytes);
+        }
+        for width in [64, 1920] {
+            let bytes: Vec<u8> = (0..width * 4).map(|n| n as u8).collect();
+            let mut old = vec![0; 1920 * 1080];
+            let mut new = old.clone();
+            let mut samples = [Vec::new(), Vec::new()];
+            for batch in 0..6 {
+                for kind in if batch % 2 == 0 { [0, 1] } else { [1, 0] } {
+                    let start = Instant::now();
+                    let pixels = if kind == 0 { &mut old } else { &mut new };
+                    for _ in 0..100 {
+                        for y in 0..1080 {
+                            for x in (0..1920).step_by(width) {
+                                if kind == 0 {
+                                    previous(black_box(pixels), y * 1920 + x, black_box(&bytes));
+                                } else {
+                                    optimized(black_box(pixels), y * 1920 + x, black_box(&bytes));
+                                }
+                            }
+                        }
+                    }
+                    samples[kind].push(start.elapsed().as_secs_f64() * 10.0);
+                }
+            }
+            for sample in &mut samples {
+                sample.sort_by(f64::total_cmp);
+            }
+            assert_eq!(old, new);
+            eprintln!(
+                "1080p unpack, row width {width}, ms/image: previous={:.3}, optimized={:.3}",
+                samples[0][3], samples[1][3]
+            );
+        }
+    }
+
     #[test]
     fn copy_rect_matches_snapshot_for_all_small_overlaps() {
         for width in 1..=4u16 {
