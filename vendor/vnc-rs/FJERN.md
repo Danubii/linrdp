@@ -9,7 +9,33 @@ original size. Verified with a loopback RFB DesktopSize update and inspection
 of the following refresh request. The client also exposes ExtendedDesktopSize
 notifications and SetDesktopSize requests for dynamic single-screen resizing.
 RFB ExtendedDesktopSize status 4 is exposed as a pending/forwarded request,
-rather than incorrectly reporting it as a rejection.
+rather than incorrectly reporting it as a rejection. Successful
+DesktopResizeAvailable events now also update stored refresh dimensions in both
+receive paths; the wire-level regression checks incremental and full requests.
+
+The transport reserves decoder-queue capacity before reading, so freeing a slot
+wakes it without waiting for unrelated input. Concurrent read/write futures
+keep reception live during a slow write. A five-second write deadline and
+cancellable shutdown terminate stalled connections. Input enqueue is nonblocking:
+a full queue returns an error rather than silently losing key transitions or
+freezing the UI. Limits are 32 network blocks (64 KiB each), eight output events,
+256 input messages and 1 MiB per outgoing clipboard message. Events are bounded
+in count, not by one shared byte budget. Raw events can be up to 64 MiB each.
+FramebufferUpdated marks decoded server-update boundaries for optional metrics.
+
+`codec/zlib.rs`: a 32 KiB reader buffers decompressed bytes. Tests cover multiple
+sync-flushed rectangles in one zlib stream, buffer boundaries, truncation and
+trailing decoded data. `codec/zrle.rs` validates compressed sizes, rectangle
+dimensions, palette indices and run lengths before allocating/copying. Raw and
+cursor dimensions are also bounded. The shared allocation helper now initializes
+its memory instead of constructing a Vec with uninitialized elements. These
+changes do not certify all unused upstream codecs for hostile-server input.
+
+Run the regression suite with:
+
+```sh
+cargo test --manifest-path vendor/vnc-rs/Cargo.toml --locked --lib
+```
 
 `client/auth.rs`: read the entire RFB 3.7/3.8 security offer and ignore unknown
 alternatives when None or VNC password is offered. If there is no supported

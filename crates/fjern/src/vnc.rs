@@ -17,6 +17,42 @@ const MAX_PIXELS: usize = 16 * 1024 * 1024;
 // Bound UI work by time instead of stopping after only 64 tiles.
 const EVENT_BUDGET: Duration = Duration::from_millis(4);
 const MAX_EVENTS_PER_TICK: usize = 4096;
+mod scaling;
+
+struct PendingRaw {
+    rect: Rect,
+    bytes: Vec<u8>,
+    row: usize,
+}
+
+impl PendingRaw {
+    fn new(canvas: &Canvas, rect: Rect, bytes: Vec<u8>) -> Result<Self> {
+        canvas.check(rect)?;
+        if bytes.len() != usize::from(rect.width) * usize::from(rect.height) * 4 {
+            return Err(invalid("VNC pixel length mismatch"));
+        }
+        Ok(Self {
+            rect,
+            bytes,
+            row: 0,
+        })
+    }
+
+    fn step(&mut self, canvas: &mut Canvas) -> bool {
+        // A large Raw rectangle must not monopolize the event work budget.
+        let end = (self.row + 16).min(usize::from(self.rect.height));
+        let width = usize::from(self.rect.width);
+        for y in self.row..end {
+            let dst = (usize::from(self.rect.y) + y) * canvas.width + usize::from(self.rect.x);
+            unpack_pixels(
+                &mut canvas.pixels[dst..dst + width],
+                &self.bytes[y * width * 4..(y + 1) * width * 4],
+            );
+        }
+        self.row = end;
+        end == usize::from(self.rect.height)
+    }
+}
 
 struct HyprlandCapture {
     token: PathBuf,
@@ -684,13 +720,32 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
         let mut last_capture_toggle = None;
         let mut cursor_shape_active = false;
         let mut hyprland_capture = HyprlandCapture::new();
+        let mut pending_raw: Option<PendingRaw> = None;
+        let mut scaler = scaling::Scaler::default();
+        let stats_enabled = env::var_os("FJERN_VNC_STATS").is_some();
+        let mut stats_since = Instant::now();
+        let mut stats_updates = 0u64;
+        let mut stats_paints = 0u64;
+        let mut stats_work_max = Duration::ZERO;
+        let mut stats_scale = Duration::ZERO;
         while window.is_open() {
             let events_started = Instant::now();
             runtime.block_on(async {
             for _ in 0..MAX_EVENTS_PER_TICK {
+                if let Some(raw) = &mut pending_raw {
+                    if raw.step(&mut canvas) { pending_raw = None; }
+                    changed = true;
+                    if events_started.elapsed() >= EVENT_BUDGET { break; }
+                    continue;
+                }
                 match client.poll_event().await? {
                     Some(event) => {
+                        if let VncEvent::RawImage(rect, bytes) = event {
+                            pending_raw = Some(PendingRaw::new(&canvas, rect, bytes)?);
+                            continue;
+                        }
                         match &event {
+                            VncEvent::FramebufferUpdated => stats_updates += 1,
                             VncEvent::ExtendedKeyEventAvailable => {
                                 let mut keys = keyboard
                                     .lock()
@@ -753,6 +808,7 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
             }
             Ok::<(), Box<dyn Error>>(())
             })?;
+            stats_work_max = stats_work_max.max(events_started.elapsed());
             let size = window.get_size();
             if size != observed_window_size {
                 observed_window_size = size;
@@ -773,7 +829,17 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                 resize_pending = None;
             }
             if changed || rendered_size != size || window.needs_redraw() {
-                window.update_with_buffer(&canvas.pixels, canvas.width, canvas.height)?;
+                stats_paints += 1;
+                if size == (canvas.width, canvas.height) {
+                    window.update_with_buffer(&canvas.pixels, canvas.width, canvas.height)?;
+                } else if size.0 > 0 && size.1 > 0 {
+                    let scale_started = Instant::now();
+                    let pixels = scaler.render(&canvas, size)?;
+                    stats_scale += scale_started.elapsed();
+                    window.update_with_buffer(pixels, size.0, size.1)?;
+                } else {
+                    window.update();
+                }
                 rendered_size = size;
                 changed = false;
             } else {
@@ -947,6 +1013,22 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                 runtime.block_on(client.input(X11Event::Refresh))?;
                 last_refresh = Instant::now();
             }
+            if stats_enabled && stats_since.elapsed() >= Duration::from_secs(2) {
+                let seconds = stats_since.elapsed().as_secs_f64();
+                eprintln!(
+                    "VNC stats: updates/s={:.1} paint-attempts/s={:.1} event-max-ms={:.2} scale-ms={:.2} raw-pending={}",
+                    stats_updates as f64 / seconds,
+                    stats_paints as f64 / seconds,
+                    stats_work_max.as_secs_f64() * 1000.0,
+                    stats_scale.as_secs_f64() * 1000.0,
+                    pending_raw.is_some()
+                );
+                stats_since = Instant::now();
+                stats_updates = 0;
+                stats_paints = 0;
+                stats_work_max = Duration::ZERO;
+                stats_scale = Duration::ZERO;
+            }
         }
         let events = {
             let mut keys = keyboard
@@ -968,6 +1050,61 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn large_raw_update_yields_and_preserves_order_before_copy() {
+        let mut canvas = Canvas {
+            width: 32,
+            height: 64,
+            pixels: vec![0; 2048],
+        };
+        let bytes: Vec<u8> = (0..2048u32).flat_map(u32::to_le_bytes).collect();
+        let mut raw = PendingRaw::new(
+            &canvas,
+            Rect {
+                x: 0,
+                y: 0,
+                width: 32,
+                height: 64,
+            },
+            bytes,
+        )
+        .unwrap();
+        assert!(!raw.step(&mut canvas));
+        assert_eq!(raw.row, 16);
+        assert_eq!(canvas.pixels[511], 511);
+        assert_eq!(canvas.pixels[512], 0);
+        while !raw.step(&mut canvas) {}
+        canvas
+            .event(VncEvent::Copy(
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: 32,
+                    height: 1,
+                },
+                Rect {
+                    x: 0,
+                    y: 63,
+                    width: 32,
+                    height: 1,
+                },
+            ))
+            .unwrap();
+        assert_eq!(&canvas.pixels[..32], &(2016..2048).collect::<Vec<u32>>());
+        assert!(
+            PendingRaw::new(
+                &canvas,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: 32,
+                    height: 64
+                },
+                vec![0; 4]
+            )
+            .is_err()
+        );
+    }
     #[test]
     fn raw_tiles_preserve_borders_and_mask_padding() {
         let mut canvas = Canvas {

@@ -27,6 +27,9 @@ impl Decoder {
         let _hoty = rect.y;
         let w = rect.width;
         let h = rect.height;
+        if w > 8192 || h > 8192 || usize::from(w) * usize::from(h) > 16 * 1024 * 1024 {
+            return Err(VncError::InvalidImageData);
+        }
 
         let pixels_length = w as usize * h as usize * format.bits_per_pixel as usize / 8;
         let mask_length = (w as usize).div_ceil(8) * h as usize;

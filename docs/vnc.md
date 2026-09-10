@@ -70,8 +70,9 @@ password entry and authentication, then opened and sustained the desktop window.
 The vendored vnc-rs 0.5.3 dependency preserves its MIT/Apache licenses. A local
 fix updates refresh-request dimensions after DesktopSize events; the fixture
 observed requests change from 64x64 to 80x48. Frontend pixel/rectangle limits
-are enforced, but upstream codec allocations are not fully bounded before
-frontend validation. This remains an experimental adapter, not a claim of
+are enforced. ZRLE payload lengths, tile runs and palette indices are checked
+before copying; Raw and cursor dimensions are checked before allocation.
+Unused upstream codecs have not received the same hardening. This remains an experimental adapter, not a claim of
 complete VNC extension or hostile-server compatibility.
 
 To repeat the local wire-level smoke test, run `python3 tools/vnc_smoke.py`

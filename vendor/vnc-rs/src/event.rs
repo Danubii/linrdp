@@ -66,6 +66,8 @@ pub enum VncEvent {
     DesktopResizePending { reason: u16 },
     /// The server accepted QEMU Extended Key Event negotiation.
     ExtendedKeyEventAvailable,
+    /// All rectangles in one server framebuffer update have been decoded.
+    FramebufferUpdated,
     /// If the connector doesn't call `set_pixel_format` method
     ///
     /// The engine will generate a [VncEvent::SetPixelFormat] to let the window know how to render image

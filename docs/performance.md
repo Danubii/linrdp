@@ -8,7 +8,9 @@ required at least eight ticks to consume that image, even with every tile
 already queued. VNC now processes queued events until 4 ms of work has elapsed,
 with a secondary cap of 4096 events per tick. Every event remains ordered;
 partial images and CopyRect dependencies are never discarded. The time budget
-is checked after each event, so a single expensive event can exceed it.
+is checked after each event. Raw rectangles are applied in batches of 16 rows
+before processing later events; a following CopyRect or resize cannot overtake
+unfinished pixels. Other single expensive events can still exceed the budget.
 
 CopyRect now moves rows directly within the framebuffer using overlap-safe
 copies. Downward moves run bottom-up; upward moves run top-down. This removes
@@ -44,6 +46,54 @@ odd row widths and removal of the unused high byte. Reproduce with:
 ```sh
 cargo test --release -p fjern benchmark_vnc_unpack_pixels --locked -- --ignored --nocapture
 ```
+
+## VNC pipeline regression and measurements
+
+ZRLE now reads from a 32 KiB decompressed buffer. An isolated release benchmark
+of three-byte reads over a synthetic 1080p payload measured 43.335 → 18.161 ms.
+This uses the vendored crate's release profile and measures decompression plus
+reads/assertions, not an entire ZRLE frame or network FPS.
+
+The frontend scaler caches fixed-point coordinate maps and a source snapshot.
+It compares source rows, then recomputes only output rows that depend on a
+changed source row (including the second bilinear neighbor). Native-size
+presentation bypasses scaling. Dimensions changing invalidate the complete cache.
+This adds one source-sized snapshot, a target-sized output buffer and coordinate
+tables; each image is capped at 16 million pixels and 8192 pixels per dimension.
+The snapshot is scanned even for small damage, and native buffer submission
+still copies the complete output to compositor storage.
+
+A sparse-change 1080p → 720p benchmark measured 9.521 ms for an independent
+full-image scalar reference versus 0.623 ms for the cached renderer. The
+reference includes output allocation and is not the compiled minifb C scaler;
+this demonstrates avoided work on sparse damage, not a general 15× FPS gain.
+
+```sh
+cargo test --manifest-path vendor/vnc-rs/Cargo.toml --release --locked benchmark_buffered_inflate -- --ignored --nocapture
+cargo test --release -p fjern benchmark_vnc_scaled_damage --locked -- --ignored --nocapture
+cargo build --release -p fjern --locked
+python3 tools/vnc_pipeline_smoke.py target/release/fjern
+```
+
+The graphical smoke test opens a native client against a loopback server. It
+exercises large Raw updates, overlapping CopyRect, persistent ZRLE, an
+ExtendedDesktopSize change and subsequent refresh dimensions. It deliberately
+ends the server connection and checks client termination. A local run passed
+and reported a maximum event batch of 2.32 ms. It does not compare screenshots
+or measure scanout; pixel equivalence is covered by unit tests.
+
+For real-server diagnostics:
+
+```sh
+FJERN_VNC_STATS=1 ./target/release/fjern vnc workstation.example 5900
+```
+
+Every two seconds, stderr reports completed server updates per second (including
+empty updates), paint attempts per second, maximum UI event-batch time, total
+scaling time in the interval, and whether a Raw rectangle remains pending.
+Paint attempts are not confirmed compositor frames. These counters do not
+measure network latency or isolate decoder queue wait time. Real WayVNC video
+FPS still requires a repeatable workload and before/after comparison.
 
 ## RDP presentation
 

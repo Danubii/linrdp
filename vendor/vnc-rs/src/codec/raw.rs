@@ -29,6 +29,15 @@ impl Decoder {
         // | width*height*bytesPerPixel | PIXEL array  | pixels      |
         // +----------------------------+--------------+-------------+
         let bpp = format.bits_per_pixel / 8;
+        if rect.width == 0
+            || rect.height == 0
+            || rect.width > 8192
+            || rect.height > 8192
+            || usize::from(rect.width) * usize::from(rect.height) > 16 * 1024 * 1024
+            || ![8, 16, 32].contains(&format.bits_per_pixel)
+        {
+            return Err(VncError::InvalidImageData);
+        }
         let buffer_size = bpp as usize * rect.height as usize * rect.width as usize;
         let mut pixels = uninit_vec(buffer_size);
         input.read_exact(&mut pixels).await?;

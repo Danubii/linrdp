@@ -11,10 +11,5 @@ pub(crate) use trle::Decoder as TrleDecoder;
 pub(crate) use zrle::Decoder as ZrleDecoder;
 
 fn uninit_vec(len: usize) -> Vec<u8> {
-    let mut v = Vec::with_capacity(len);
-    #[allow(clippy::uninit_vec)]
-    unsafe {
-        v.set_len(len)
-    };
-    v
+    vec![0; len]
 }

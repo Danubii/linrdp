@@ -5,11 +5,7 @@ use std::{future::Future, sync::Arc, vec};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::{
-        mpsc::{
-            channel,
-            error::{TryRecvError, TrySendError},
-            Receiver, Sender,
-        },
+        mpsc::{channel, error::TryRecvError, Receiver, Sender},
         oneshot, Mutex,
     },
 };
@@ -17,7 +13,7 @@ use tokio_util::compat::*;
 use tracing::*;
 
 use crate::{codec, PixelFormat, Rect, VncEncoding, VncError, VncEvent, X11Event};
-const CHANNEL_SIZE: usize = 4096;
+const CHANNEL_SIZE: usize = 256;
 
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::spawn;
@@ -92,9 +88,9 @@ impl VncInner {
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
-        let (conn_ch_tx, conn_ch_rx) = channel(CHANNEL_SIZE);
+        let (conn_ch_tx, conn_ch_rx) = channel(32);
         let (input_ch_tx, input_ch_rx) = channel(CHANNEL_SIZE);
-        let (output_ch_tx, output_ch_rx) = channel(CHANNEL_SIZE);
+        let (output_ch_tx, output_ch_rx) = channel(8);
         let (decoding_stop_tx, decoding_stop_rx) = oneshot::channel();
         let (net_conn_stop_tx, net_conn_stop_rx) = oneshot::channel();
 
@@ -204,12 +200,7 @@ impl VncInner {
                     0, // non-incremental: server sends entire framebuffer
                 ),
                 X11Event::SetDesktopSize(screen) => {
-                    ClientMsg::SetDesktopSize(
-                        screen.id,
-                        screen.width,
-                        screen.height,
-                        screen.flags,
-                    )
+                    ClientMsg::SetDesktopSize(screen.id, screen.width, screen.height, screen.flags)
                 }
                 X11Event::KeyEvent(key) => ClientMsg::KeyEvent(key.keycode, key.down),
                 X11Event::ExtendedKeyEvent {
@@ -220,9 +211,16 @@ impl VncInner {
                 X11Event::PointerEvent(mouse) => {
                     ClientMsg::PointerEvent(mouse.position_x, mouse.position_y, mouse.bottons)
                 }
-                X11Event::CopyText(text) => ClientMsg::ClientCutText(text),
+                X11Event::CopyText(text) => {
+                    if text.len() > 1024 * 1024 {
+                        return Err(VncError::General("VNC clipboard text exceeds 1 MiB".into()));
+                    }
+                    ClientMsg::ClientCutText(text)
+                }
             };
-            self.input_ch.send(msg).await?;
+            self.input_ch
+                .try_send(msg)
+                .map_err(|e| VncError::General(format!("VNC input queue unavailable: {e}")))?;
             Ok(())
         }
     }
@@ -233,11 +231,13 @@ impl VncInner {
         } else {
             match self.output_ch.recv().await {
                 Some(e) => {
-                    if let VncEvent::SetResolution(screen) = &e {
-                        self.screen = (screen.width, screen.height);
+                    match &e {
+                        VncEvent::SetResolution(s) => self.screen = (s.width, s.height),
+                        VncEvent::DesktopResizeAvailable(s) => self.screen = (s.width, s.height),
+                        _ => {}
                     }
                     Ok(e)
-                },
+                }
                 None => {
                     self.closed = true;
                     Err(VncError::ClientNotRunning)
@@ -257,11 +257,13 @@ impl VncInner {
                 }
                 Err(TryRecvError::Empty) => Ok(None),
                 Ok(e) => {
-                    if let VncEvent::SetResolution(screen) = &e {
-                        self.screen = (screen.width, screen.height);
+                    match &e {
+                        VncEvent::SetResolution(s) => self.screen = (s.width, s.height),
+                        VncEvent::DesktopResizeAvailable(s) => self.screen = (s.width, s.height),
+                        _ => {}
                     }
                     Ok(Some(e))
-                },
+                }
             }
             // Ok(self.output_ch.recv().await)
         }
@@ -298,9 +300,13 @@ impl VncClient {
     /// Start ServerInit and decoding after the caller completes RFB security.
     /// The caller must authenticate the stream before invoking this constructor.
     pub async fn from_authenticated_stream<S>(
-        stream: S, shared: bool, pixel_format: Option<PixelFormat>, encodings: Vec<VncEncoding>,
+        stream: S,
+        shared: bool,
+        pixel_format: Option<PixelFormat>,
+        encodings: Vec<VncEncoding>,
     ) -> Result<Self, VncError>
-    where S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
         Self::new(stream, shared, pixel_format, encodings).await
     }
@@ -532,6 +538,7 @@ where
                         }
                     }
                 }
+                output_func(VncEvent::FramebufferUpdated).await?;
             }
             // SetColorMapEntries,
             ServerMsg::Bell => {
@@ -548,6 +555,150 @@ where
 #[cfg(test)]
 mod fjern_resize_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn outgoing_key_edges_are_ordered_and_eof_ends_transport() {
+        let (client, mut server) = tokio::io::duplex(64);
+        let (input, input_rx) = channel(2);
+        let (output, _output_rx) = channel(2);
+        let (_stop, stop_rx) = oneshot::channel();
+        input.send(ClientMsg::KeyEvent(65, true)).await.unwrap();
+        input.send(ClientMsg::KeyEvent(65, false)).await.unwrap();
+        let task = tokio::spawn(async_connection_process_loop(
+            client, input_rx, output, stop_rx,
+        ));
+        let mut wire = [0; 16];
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            server.read_exact(&mut wire),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(wire, [4, 1, 0, 0, 0, 0, 0, 65, 4, 0, 0, 0, 0, 0, 0, 65]);
+        drop(server);
+        tokio::time::timeout(std::time::Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn permanently_stalled_write_has_a_deadline() {
+        let (client, _server) = tokio::io::duplex(1);
+        let (input, input_rx) = channel(2);
+        let (output, _output_rx) = channel(2);
+        let (_stop, stop_rx) = oneshot::channel();
+        input.send(ClientMsg::KeyEvent(65, true)).await.unwrap();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(7),
+            async_connection_process_loop(client, input_rx, output, stop_rx),
+        )
+        .await
+        .unwrap();
+        assert!(result.unwrap_err().to_string().contains("write timed out"));
+    }
+
+    #[tokio::test]
+    async fn extended_resize_updates_both_receive_paths_and_refresh_wire() {
+        for polling in [false, true] {
+            let (tx, rx) = channel(2);
+            let (input, mut messages) = channel(2);
+            let mut inner = VncInner {
+                name: String::new(),
+                screen: (64, 64),
+                input_ch: input,
+                output_ch: rx,
+                decoding_stop: None,
+                net_conn_stop: None,
+                closed: false,
+            };
+            tx.send(VncEvent::DesktopResizeAvailable(crate::DesktopScreen {
+                id: 1,
+                width: 1920,
+                height: 1080,
+                flags: 0,
+            }))
+            .await
+            .unwrap();
+            if polling {
+                inner.poll_event().await.unwrap();
+            } else {
+                inner.recv_event().await.unwrap();
+            }
+            for event in [X11Event::Refresh, X11Event::FullRefresh] {
+                inner.input(event).await.unwrap();
+                let mut wire = Vec::new();
+                messages
+                    .recv()
+                    .await
+                    .unwrap()
+                    .write(&mut wire)
+                    .await
+                    .unwrap();
+                assert_eq!(&wire[6..10], &[7, 128, 4, 56]);
+            }
+            inner.input(X11Event::Refresh).await.unwrap();
+            inner.input(X11Event::Refresh).await.unwrap();
+            assert!(inner.input(X11Event::Refresh).await.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn full_decoder_queue_resumes_without_input_and_stop_is_prompt() {
+        let (client, mut server) = tokio::io::duplex(64);
+        let (_input, input_rx) = channel(1);
+        let (output, mut output_rx) = channel(1);
+        output.send(Ok(vec![9])).await.unwrap();
+        let (stop, stop_rx) = oneshot::channel();
+        let task = tokio::spawn(async_connection_process_loop(
+            client, input_rx, output, stop_rx,
+        ));
+        server.write_all(&[1, 2, 3]).await.unwrap();
+        tokio::task::yield_now().await;
+        assert_eq!(output_rx.recv().await.unwrap().unwrap(), [9]);
+        let bytes = tokio::time::timeout(std::time::Duration::from_secs(1), output_rx.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(bytes, [1, 2, 3]);
+        stop.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn stalled_write_does_not_block_reads_or_shutdown() {
+        let (client, mut server) = tokio::io::duplex(16);
+        let (input, input_rx) = channel(2);
+        let (output, mut output_rx) = channel(2);
+        let (stop, stop_rx) = oneshot::channel();
+        input
+            .send(ClientMsg::ClientCutText("x".repeat(1024)))
+            .await
+            .unwrap();
+        let task = tokio::spawn(async_connection_process_loop(
+            client, input_rx, output, stop_rx,
+        ));
+        server.write_all(&[42]).await.unwrap();
+        let bytes = tokio::time::timeout(std::time::Duration::from_secs(1), output_rx.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(bytes, [42]);
+        stop.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
 
     #[test]
     fn forwarded_resize_is_pending_not_rejected() {
@@ -567,7 +718,7 @@ mod fjern_resize_tests {
 }
 
 async fn async_connection_process_loop<S>(
-    mut stream: S,
+    stream: S,
     mut input_ch: Receiver<ClientMsg>,
     conn_ch: Sender<std::io::Result<Vec<u8>>>,
     mut stop_ch: oneshot::Receiver<()>,
@@ -575,54 +726,37 @@ async fn async_connection_process_loop<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let mut buffer = [0; 65535];
-    let mut pending = 0;
-
-    // main traffic loop
-    loop {
-        if pending > 0 {
-            match conn_ch.try_send(Ok(buffer[0..pending].to_owned())) {
-                Err(TrySendError::Full(_message)) => (),
-                Err(TrySendError::Closed(_message)) => break,
-                Ok(()) => pending = 0,
+    let (mut reader, mut writer) = tokio::io::split(stream);
+    let receive = async {
+        loop {
+            // Capacity wakes this task directly. Reserve before reading so no
+            // payload is copied or lost while the decoder is backpressured.
+            let permit = conn_ch
+                .reserve()
+                .await
+                .map_err(|_| VncError::ClientNotRunning)?;
+            let mut buffer = vec![0; 65536];
+            let n = reader.read(&mut buffer).await?;
+            if n == 0 {
+                return Ok::<(), VncError>(());
             }
+            buffer.truncate(n);
+            permit.send(Ok(buffer));
         }
-
-        tokio::select! {
-            _ = &mut stop_ch => break,
-            result = stream.read(&mut buffer), if pending == 0 => {
-                match result {
-                    Ok(nread) => {
-                        if nread > 0 {
-                            match conn_ch.try_send(Ok(buffer[0..nread].to_owned())) {
-                                Err(TrySendError::Full(_message)) => pending = nread,
-                                Err(TrySendError::Closed(_message)) => break,
-                                Ok(()) => ()
-                            }
-                        } else {
-                            // According to the tokio's Doc
-                            // https://docs.rs/tokio/latest/tokio/io/trait.AsyncRead.html
-                            // if nread == 0, then EOF is reached
-                            trace!("Net Connection EOF detected");
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        error!("{}", e.to_string());
-                        break;
-                    }
-                }
-            }
-            Some(msg) = input_ch.recv() => {
-                msg.write(&mut stream).await?;
-            }
+    };
+    let transmit = async {
+        while let Some(msg) = input_ch.recv().await {
+            tokio::time::timeout(std::time::Duration::from_secs(5), msg.write(&mut writer))
+                .await
+                .map_err(|_| VncError::General("VNC write timed out".into()))??;
         }
+        Ok::<(), VncError>(())
+    };
+    // Reads continue during a slow write. Cancellation drops both halves;
+    // never resume a partially written RFB message.
+    tokio::select! {
+        _ = &mut stop_ch => Ok(()),
+        result = receive => result,
+        result = transmit => result,
     }
-
-    // notify the decoding thread
-    let _ = conn_ch
-        .send(Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof)))
-        .await;
-
-    Ok(())
 }

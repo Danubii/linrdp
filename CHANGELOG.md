@@ -4,6 +4,15 @@ All notable user-facing changes are documented here.
 
 ## Unreleased
 
+- Correct refresh dimensions after VNC ExtendedDesktopSize updates.
+- Resume VNC reads immediately when decoder-queue capacity becomes available;
+  handle slow writes independently with a deadline and explicit queue errors.
+- Buffer ZRLE decompression and reject oversized payloads, invalid palette
+  indices and runs before copying.
+- Process large Raw images in row batches and cache bilinear scaling for
+  unchanged rows, preserving interpolation and pointer mapping.
+- Add optional VNC processing statistics and a graphical loopback regression.
+
 - VNC batches event processing inside one async runtime call per UI tick and
   converts pixel rows through bounded slices to reduce per-pixel indexing work.
 
