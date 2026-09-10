@@ -18,9 +18,12 @@ wakes it without waiting for unrelated input. Concurrent read/write futures
 keep reception live during a slow write. A five-second write deadline and
 cancellable shutdown terminate stalled connections. Input enqueue is nonblocking:
 a full queue returns an error rather than silently losing key transitions or
-freezing the UI. Limits are 32 network blocks (64 KiB each), eight output events,
+freezing the UI. Limits are 32 network blocks (64 KiB each), 4096 output events,
 256 input messages and 1 MiB per outgoing clipboard message. Events are bounded
-in count, not by one shared byte budget. Raw events can be up to 64 MiB each.
+by a shared 64 MiB payload budget as well as event count. This permits a full
+4K frame of small ZRLE tiles without allowing thousands of large Raw frames.
+The decoder's in-progress event and the UI's dequeued event are additional to
+that queue budget; it is not a total process-memory limit.
 FramebufferUpdated marks decoded server-update boundaries for optional metrics.
 
 `codec/zlib.rs`: a 32 KiB reader buffers decompressed bytes. Tests cover multiple

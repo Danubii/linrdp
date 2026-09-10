@@ -6,7 +6,7 @@ use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::{
         mpsc::{channel, error::TryRecvError, Receiver, Sender},
-        oneshot, Mutex,
+        oneshot, Mutex, OwnedSemaphorePermit, Semaphore,
     },
 };
 use tokio_util::compat::*;
@@ -14,6 +14,45 @@ use tracing::*;
 
 use crate::{codec, PixelFormat, Rect, VncEncoding, VncError, VncEvent, X11Event};
 const CHANNEL_SIZE: usize = 256;
+const OUTPUT_EVENTS: usize = 4096;
+const OUTPUT_BYTES: usize = 64 * 1024 * 1024;
+
+#[derive(Debug)]
+struct QueuedEvent {
+    event: VncEvent,
+    _permit: OwnedSemaphorePermit,
+}
+
+async fn enqueue_event(
+    output: &Sender<QueuedEvent>,
+    budget: &Arc<Semaphore>,
+    event: VncEvent,
+) -> Result<(), VncError> {
+    let bytes = match &event {
+        VncEvent::RawImage(_, data)
+        | VncEvent::JpegImage(_, data)
+        | VncEvent::SetCursor(_, data) => data.len(),
+        VncEvent::Text(text) | VncEvent::Error(text) => text.len(),
+        _ => 0,
+    };
+    if bytes > OUTPUT_BYTES {
+        return Err(VncError::General(
+            "VNC event exceeds output byte budget".into(),
+        ));
+    }
+    let permit = budget
+        .clone()
+        .acquire_many_owned(bytes as u32)
+        .await
+        .map_err(|e| VncError::General(e.to_string()))?;
+    output
+        .send(QueuedEvent {
+            event,
+            _permit: permit,
+        })
+        .await
+        .map_err(|e| VncError::General(e.to_string()))
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::spawn;
@@ -70,7 +109,7 @@ struct VncInner {
     name: String,
     screen: (u16, u16),
     input_ch: Sender<ClientMsg>,
-    output_ch: Receiver<VncEvent>,
+    output_ch: Receiver<QueuedEvent>,
     decoding_stop: Option<oneshot::Sender<()>>,
     net_conn_stop: Option<oneshot::Sender<()>>,
     closed: bool,
@@ -90,7 +129,8 @@ impl VncInner {
     {
         let (conn_ch_tx, conn_ch_rx) = channel(32);
         let (input_ch_tx, input_ch_rx) = channel(CHANNEL_SIZE);
-        let (output_ch_tx, output_ch_rx) = channel(8);
+        let (output_ch_tx, output_ch_rx) = channel(OUTPUT_EVENTS);
+        let output_budget = Arc::new(Semaphore::new(OUTPUT_BYTES));
         let (decoding_stop_tx, decoding_stop_rx) = oneshot::channel();
         let (net_conn_stop_tx, net_conn_stop_rx) = oneshot::channel();
 
@@ -100,8 +140,7 @@ impl VncInner {
         trace!("server init msg");
         let (name, (width, height)) =
             read_server_init(&mut stream, &mut pixel_format, &|e| async {
-                output_ch_tx.send(e).await?;
-                Ok(())
+                enqueue_event(&output_ch_tx, &output_budget, e).await
             })
             .await?;
 
@@ -129,10 +168,7 @@ impl VncInner {
                 FuturesAsyncReadCompatExt::compat(conn_ch_rx)
             };
 
-            let output_func = |e| async {
-                output_ch_tx.send(e).await?;
-                Ok(())
-            };
+            let output_func = |e| async { enqueue_event(&output_ch_tx, &output_budget, e).await };
 
             let pf = pixel_format.as_ref().unwrap();
             if let Err(e) =
@@ -231,6 +267,7 @@ impl VncInner {
         } else {
             match self.output_ch.recv().await {
                 Some(e) => {
+                    let e = e.event;
                     match &e {
                         VncEvent::SetResolution(s) => self.screen = (s.width, s.height),
                         VncEvent::DesktopResizeAvailable(s) => self.screen = (s.width, s.height),
@@ -257,6 +294,7 @@ impl VncInner {
                 }
                 Err(TryRecvError::Empty) => Ok(None),
                 Ok(e) => {
+                    let e = e.event;
                     match &e {
                         VncEvent::SetResolution(s) => self.screen = (s.width, s.height),
                         VncEvent::DesktopResizeAvailable(s) => self.screen = (s.width, s.height),
@@ -601,6 +639,54 @@ mod fjern_resize_tests {
     }
 
     #[tokio::test]
+    async fn output_queue_bounds_bytes_without_throttling_small_tiles() {
+        let (tx, mut rx) = channel(OUTPUT_EVENTS);
+        let budget = Arc::new(Semaphore::new(OUTPUT_BYTES));
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            width: 64,
+            height: 64,
+        };
+        for _ in 0..2040 {
+            enqueue_event(&tx, &budget, VncEvent::RawImage(rect, vec![0; 64 * 64 * 4]))
+                .await
+                .unwrap();
+        }
+        assert_eq!(rx.len(), 2040);
+        while let Ok(event) = rx.try_recv() {
+            drop(event);
+        }
+        assert_eq!(budget.available_permits(), OUTPUT_BYTES);
+
+        let budget = Arc::new(Semaphore::new(16));
+        enqueue_event(&tx, &budget, VncEvent::RawImage(rect, vec![0; 16]))
+            .await
+            .unwrap();
+        let waiting = enqueue_event(&tx, &budget, VncEvent::RawImage(rect, vec![1; 1]));
+        tokio::pin!(waiting);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut waiting)
+                .await
+                .is_err()
+        );
+        drop(rx.recv().await.unwrap());
+        tokio::time::timeout(std::time::Duration::from_secs(1), &mut waiting)
+            .await
+            .unwrap()
+            .unwrap();
+        drop(rx.recv().await.unwrap());
+        assert_eq!(budget.available_permits(), 16);
+        assert!(enqueue_event(
+            &tx,
+            &budget,
+            VncEvent::RawImage(rect, vec![0; OUTPUT_BYTES + 1])
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
     async fn extended_resize_updates_both_receive_paths_and_refresh_wire() {
         for polling in [false, true] {
             let (tx, rx) = channel(2);
@@ -614,12 +700,16 @@ mod fjern_resize_tests {
                 net_conn_stop: None,
                 closed: false,
             };
-            tx.send(VncEvent::DesktopResizeAvailable(crate::DesktopScreen {
-                id: 1,
-                width: 1920,
-                height: 1080,
-                flags: 0,
-            }))
+            enqueue_event(
+                &tx,
+                &Arc::new(Semaphore::new(OUTPUT_BYTES)),
+                VncEvent::DesktopResizeAvailable(crate::DesktopScreen {
+                    id: 1,
+                    width: 1920,
+                    height: 1080,
+                    flags: 0,
+                }),
+            )
             .await
             .unwrap();
             if polling {
