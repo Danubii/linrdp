@@ -2,6 +2,7 @@
 """Graphical loopback regression. Opens one window; server closes it after checks.
 
 Run: python3 tools/vnc_pipeline_smoke.py target/release/fjern
+Add --4k-scroll for sustained full-frame 4K ZRLE changes before resizing.
 No credentials or existing profiles are used. Requires a graphical session.
 """
 import os
@@ -15,6 +16,9 @@ import zlib
 
 
 def main():
+    stress = "--4k-scroll" in sys.argv[2:]
+    width, height = (3840, 2160) if stress else (1920, 1080)
+    resize_at = 65 if stress else 5
     with tempfile.TemporaryDirectory(prefix="fjern-pipeline-") as config, socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         listener.listen(1)
@@ -51,7 +55,7 @@ def main():
                 assert read(1) == b"\x01"
                 pf = struct.pack(">BBBBHHHBBBxxx", 32, 24, 0, 1, 255, 255, 255, 16, 8, 0)
                 name = b"Fjern pipeline regression"
-                conn.sendall(struct.pack(">HH", 1920, 1080) + pf + struct.pack(">I", len(name)) + name)
+                conn.sendall(struct.pack(">HH", width, height) + pf + struct.pack(">I", len(name)) + name)
                 requests = 0
                 sizes = set()
                 started = time.monotonic()
@@ -69,14 +73,18 @@ def main():
                         sizes.add(struct.unpack(">HH", request[5:9]))
                         requests += 1
                         if requests == 1:
-                            update([rect(0, 0, 1920, 1080, 0, b"\x11\x22\x33\x00" * (1920 * 1080))])
+                            update([rect(0, 0, width, height, 0, b"\x11\x22\x33\x00" * (width * height))])
                         elif requests == 2:
-                            update([rect(0, 16, 1920, 1064, 1, struct.pack(">HH", 0, 0))])
-                        elif requests in (3, 4):
-                            tiles = b"\x01\x55\x66\x77" * (30 * 17)
+                            update([rect(0, 16, width, height - 16, 1, struct.pack(">HH", 0, 0))])
+                        elif 3 <= requests < resize_at:
+                            # Every tile changes each frame; adjacent rows have
+                            # distinct colors to model large scrolling damage.
+                            tiles = b"".join(bytes((1, (row + requests) % 256, 102, 119))
+                                             * ((width + 63) // 64)
+                                             for row in range((height + 63) // 64))
                             packed = compressor.compress(tiles) + compressor.flush(zlib.Z_SYNC_FLUSH)
-                            update([rect(0, 0, 1920, 1080, 16, struct.pack(">I", len(packed)) + packed)])
-                        elif requests == 5:
+                            update([rect(0, 0, width, height, 16, struct.pack(">I", len(packed)) + packed)])
+                        elif requests == resize_at:
                             screens = b"\x01\x00\x00\x00" + struct.pack(">IHHHHI", 1, 0, 0, 1280, 720, 0)
                             update([rect(0, 0, 1280, 720, -308, screens),
                                     rect(0, 0, 1280, 720, 0, b"\x88\x99\xaa\x00" * (1280 * 720))])

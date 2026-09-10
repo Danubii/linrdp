@@ -55,10 +55,61 @@ pub struct Decoder {
     decompressor: Option<flate2::Decompress>,
 }
 
+// Expand a validated run with logarithmically many bulk copies, rather than
+// repeating palette validation and Vec growth checks for every pixel.
+fn append_run(pixels: &mut Vec<u8>, color: &[u8], count: usize) {
+    if count == 0 { return; }
+    let start = pixels.len();
+    pixels.extend_from_slice(color);
+    let mut filled = 1;
+    while filled < count {
+        let next = filled.min(count - filled);
+        pixels.extend_from_within(start..start + next * color.len());
+        filled += next;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Mutex;
+    #[test]
+    fn block_runs_match_scalar_for_every_pixel_width() {
+        for width in [1, 2, 4] {
+            let color = & [1, 27, 128, 255][..width];
+            for count in [0, 1, 2, 3, 17, 255, 4096] {
+                let mut actual = vec![99; 7];
+                append_run(&mut actual, color, count);
+                let mut expected = vec![99; 7];
+                expected.extend(color.repeat(count));
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "release CPU benchmark"]
+    fn benchmark_block_runs() {
+        let mut samples = [Vec::new(), Vec::new()];
+        let color = std::hint::black_box([1, 2, 3, 255]);
+        for batch in 0..6 {
+            for kind in if batch % 2 == 0 { [0, 1] } else { [1, 0] } {
+                let start = std::time::Instant::now();
+                for _ in 0..2040 {
+                    let mut pixels = Vec::with_capacity(4096 * 4);
+                    if kind == 0 {
+                        for _ in 0..4096 { copy_indexed(&color, &mut pixels, 4, 0).unwrap(); }
+                    } else {
+                        append_run(&mut pixels, &color, 4096);
+                    }
+                    std::hint::black_box(pixels);
+                }
+                samples[kind].push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+        }
+        for times in &mut samples { times.sort_by(f64::total_cmp); }
+        eprintln!("2040 solid tiles: indexed {:.3} ms, block {:.3} ms", samples[0][3], samples[1][3]);
+    }
     fn format() -> PixelFormat {
         PixelFormat::try_from([32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0]).unwrap()
     }
@@ -372,9 +423,7 @@ impl Decoder {
                     }
                     (false, 1) => {
                         // Color fill
-                        for _ in 0..pixel_count {
-                            copy_indexed(&palette, &mut pixels, bpp, 0)?
-                        }
+                        append_run(&mut pixels, &palette[..bpp], pixel_count);
                     }
                     (false, 2..=16) => {
                         // Indexed pixels
@@ -418,9 +467,7 @@ impl Decoder {
                                 bpp,
                             )?;
                             let run_length = read_run_length(&mut reader, pixel_count - count)?;
-                            for _ in 0..run_length {
-                                pixels.extend(&pixel)
-                            }
+                            append_run(&mut pixels, &pixel, run_length);
                             count += run_length;
                         }
                     }
@@ -436,9 +483,10 @@ impl Decoder {
                             } else {
                                 1
                             };
-                            for _ in 0..run_length {
-                                copy_indexed(&palette, &mut pixels, bpp, index)?;
-                            }
+                            let start = index as usize * bpp;
+                            let color = palette.get(start..start + bpp)
+                                .ok_or(VncError::InvalidImageData)?;
+                            append_run(&mut pixels, color, run_length);
                             count += run_length;
                         }
                     }

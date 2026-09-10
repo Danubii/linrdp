@@ -25,6 +25,15 @@ struct PendingRaw {
     row: usize,
 }
 
+fn begin_raw(canvas: &mut Canvas, rect: Rect, bytes: Vec<u8>) -> Result<Option<PendingRaw>> {
+    if bytes.len() <= 64 * 64 * 4 {
+        canvas.event(VncEvent::RawImage(rect, bytes))?;
+        Ok(None)
+    } else {
+        Ok(Some(PendingRaw::new(canvas, rect, bytes)?))
+    }
+}
+
 impl PendingRaw {
     fn new(canvas: &Canvas, rect: Rect, bytes: Vec<u8>) -> Result<Self> {
         canvas.check(rect)?;
@@ -733,6 +742,8 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
             runtime.block_on(async {
             for _ in 0..MAX_EVENTS_PER_TICK {
                 if let Some(raw) = &mut pending_raw {
+                    scaler.damage(usize::from(raw.rect.x), usize::from(raw.rect.y) + raw.row,
+                        usize::from(raw.rect.width), (usize::from(raw.rect.height) - raw.row).min(16));
                     if raw.step(&mut canvas) { pending_raw = None; }
                     changed = true;
                     if events_started.elapsed() >= EVENT_BUDGET { break; }
@@ -741,7 +752,14 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                 match client.poll_event().await? {
                     Some(event) => {
                         if let VncEvent::RawImage(rect, bytes) = event {
-                            pending_raw = Some(PendingRaw::new(&canvas, rect, bytes)?);
+                            // A ZRLE tile is at most 16 KiB. Apply it in one
+                            // iteration; only large Raw rectangles need slicing.
+                            pending_raw = begin_raw(&mut canvas, rect, bytes)?;
+                            if pending_raw.is_none() {
+                                scaler.damage(rect.x.into(), rect.y.into(), rect.width.into(), rect.height.into());
+                                changed = true;
+                                if events_started.elapsed() >= EVENT_BUDGET { break; }
+                            }
                             continue;
                         }
                         match &event {
@@ -796,6 +814,12 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
                                     "VNC: server cursor removed; local client cursor remains visible."
                                 );
                             }
+                            _ => {}
+                        }
+                        match &event {
+                            VncEvent::Copy(dst, _) => scaler.damage(dst.x.into(), dst.y.into(), dst.width.into(), dst.height.into()),
+                            VncEvent::SetResolution(_) | VncEvent::DesktopResizeAvailable(_) =>
+                                scaler.damage(0, 0, canvas.width, canvas.height),
                             _ => {}
                         }
                         changed |= canvas.event(event)?;
@@ -1050,6 +1074,46 @@ pub fn run(host: &str, port: u16, user: Option<&str>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn full_4k_tiles_fit_event_count_budget_without_raw_substeps() {
+        let mut canvas = Canvas::default();
+        canvas.resize(3840, 2160).unwrap();
+        let mut events = 0;
+        for y in (0..2160).step_by(64) {
+            for x in (0..3840).step_by(64) {
+                let height = (2160 - y).min(64);
+                let rect = Rect {
+                    x,
+                    y,
+                    width: 64,
+                    height,
+                };
+                assert!(
+                    begin_raw(&mut canvas, rect, vec![17; 64 * height as usize * 4])
+                        .unwrap()
+                        .is_none()
+                );
+                events += 1;
+            }
+        }
+        assert_eq!(events, 2040);
+        assert!(events < MAX_EVENTS_PER_TICK);
+        assert!(canvas.pixels.iter().all(|&p| p == 0x111111));
+        assert!(
+            begin_raw(
+                &mut canvas,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: 128,
+                    height: 128
+                },
+                vec![0; 128 * 128 * 4]
+            )
+            .unwrap()
+            .is_some()
+        );
+    }
     #[test]
     fn large_raw_update_yields_and_preserves_order_before_copy() {
         let mut canvas = Canvas {

@@ -34,6 +34,10 @@ cursor dimensions are also bounded. The shared allocation helper now initializes
 its memory instead of constructing a Vec with uninitialized elements. These
 changes do not certify all unused upstream codecs for hostile-server input.
 
+Solid ZRLE tiles and RLE runs expand with doubling block copies. Indexed runs
+validate their palette entry once before expansion; tests cover all supported
+pixel widths, non-power-of-two runs and existing persistent-stream cases.
+
 Run the regression suite with:
 
 ```sh

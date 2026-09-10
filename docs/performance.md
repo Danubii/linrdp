@@ -8,7 +8,9 @@ required at least eight ticks to consume that image, even with every tile
 already queued. VNC now processes queued events until 4 ms of work has elapsed,
 with a secondary cap of 4096 events per tick. Every event remains ordered;
 partial images and CopyRect dependencies are never discarded. The time budget
-is checked after each event. Raw rectangles are applied in batches of 16 rows
+is checked after each event. Small Raw events (including ZRLE tiles up to
+64×64) are applied in one iteration: a complete 4K frame takes 2040 tile
+iterations, not 10,200 tile/substep iterations. Large Raw rectangles use batches of 16 rows
 before processing later events; a following CopyRect or resize cannot overtake
 unfinished pixels. Other single expensive events can still exceed the budget.
 
@@ -54,16 +56,46 @@ of three-byte reads over a synthetic 1080p payload measured 43.335 → 18.161 ms
 This uses the vendored crate's release profile and measures decompression plus
 reads/assertions, not an entire ZRLE frame or network FPS.
 
-The frontend scaler caches fixed-point coordinate maps and a source snapshot.
-It compares source rows, then recomputes only output rows that depend on a
-changed source row (including the second bilinear neighbor). Native-size
-presentation bypasses scaling. Dimensions changing invalidate the complete cache.
-This adds one source-sized snapshot, a target-sized output buffer and coordinate
-tables; each image is capped at 16 million pixels and 8192 pixels per dimension.
-The snapshot is scanned even for small damage, and native buffer submission
-still copies the complete output to compositor storage.
+The frontend scaler caches fixed-point coordinate maps and target pixels.
+Raw updates and CopyRect destinations explicitly invalidate source-row spans;
+only target spans depending on those pixels are recomputed, including both
+bilinear neighbors. There is no source snapshot or full-source comparison.
+Native-size presentation bypasses scaling; pending damage remains until a
+scaled presentation consumes it. Resize invalidates the cache, including a
+same-sized desktop reset. Each image is capped at 16 million pixels and 8192
+pixels per dimension.
 
-A sparse-change 1080p → 720p benchmark measured 9.521 ms for an independent
+The bilinear pixel calculation packs two channels into independent 32-bit
+lanes of a u64, preserving the original integer rounding. A regression compares
+all 65,536 fraction pairs for contrasting and maximum channel values with the
+four-channel scalar implementation. `benchmark_vnc_blend` isolates that kernel;
+it does not measure a complete frame.
+
+Wayland buffers are persistently mapped shared memory. Changed row runs are
+copied directly into released buffers without per-frame file writes. Surface
+damage is calculated against the last submitted image, independently of the
+older buffer selected for reuse. This distinction handles A → B → A changes
+without stale compositor content. Busy buffers remain untouched; a full pool
+retains the existing redraw/retry behavior. Fullscreen changes coalesce into
+one contiguous copy and one damage rectangle.
+
+ZRLE solid tiles and RLE runs use doubling block copies after a single palette
+validation per run. The persistent stream and malformed-input checks remain.
+
+Local isolated release measurements for this second pass:
+
+| Workload | Previous path | New path |
+| --- | ---: | ---: |
+| 4K full-change buffer submission | 10.300 ms | 4.663 ms |
+| Expand 2040 solid ZRLE tiles | 119.312 ms | 1.063 ms |
+
+These alternate execution order over six batches and report the upper median.
+The first includes both damage comparisons and copying but excludes compositor
+presentation. The second only measures solid-tile expansion, not compression,
+transport or arbitrary website content, using the vendored crate's release
+profile. Neither result is a remote FPS measurement.
+
+A previous row-snapshot implementation's sparse-change 1080p → 720p benchmark measured 9.521 ms for an independent
 full-image scalar reference versus 0.623 ms for the cached renderer. The
 reference includes output allocation and is not the compiled minifb C scaler;
 this demonstrates avoided work on sparse damage, not a general 15× FPS gain.
@@ -71,8 +103,11 @@ this demonstrates avoided work on sparse damage, not a general 15× FPS gain.
 ```sh
 cargo test --manifest-path vendor/vnc-rs/Cargo.toml --release --locked benchmark_buffered_inflate -- --ignored --nocapture
 cargo test --release -p fjern benchmark_vnc_scaled_damage --locked -- --ignored --nocapture
+cargo test --manifest-path vendor/minifb/Cargo.toml --release --locked --lib benchmark_fullscreen_submission -- --ignored --nocapture
+cargo test --manifest-path vendor/vnc-rs/Cargo.toml --release --locked --lib benchmark_block_runs -- --ignored --nocapture
 cargo build --release -p fjern --locked
 python3 tools/vnc_pipeline_smoke.py target/release/fjern
+python3 tools/vnc_pipeline_smoke.py target/release/fjern --4k-scroll
 ```
 
 The graphical smoke test opens a native client against a loopback server. It

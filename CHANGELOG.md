@@ -4,6 +4,12 @@ All notable user-facing changes are documented here.
 
 ## Unreleased
 
+- Apply small VNC tiles in one UI iteration and scale explicit damage spans
+  without scanning or keeping a second source image.
+- Submit Wayland frames through mapped shared memory with partial row updates
+  and buffer-reuse-aware surface damage.
+- Expand ZRLE solid tiles and RLE runs with block copies.
+
 - Correct refresh dimensions after VNC ExtendedDesktopSize updates.
 - Resume VNC reads immediately when decoder-queue capacity becomes available;
   handle slow writes independently with a deadline and explicit queue errors.

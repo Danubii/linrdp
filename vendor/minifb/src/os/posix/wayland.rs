@@ -2,7 +2,6 @@ use std::{
     cell::RefCell,
     ffi::c_void,
     fs::File,
-    io::{Seek, SeekFrom, Write},
     os::unix::io::{AsRawFd, RawFd},
     ptr::NonNull,
     rc::Rc,
@@ -72,12 +71,59 @@ struct Buffer {
     buffer: Main<WlBuffer>,
     buffer_state: Rc<RefCell<bool>>,
     fb_size: (i32, i32),
+    pixels: MappedPixels,
+}
+
+struct MappedPixels {
+    ptr: NonNull<u32>,
+    len: usize,
+}
+
+impl MappedPixels {
+    fn new(fd: &File, len: usize) -> std::io::Result<Self> {
+        let bytes = len.checked_mul(4).filter(|&n| n > 0 && n <= isize::MAX as usize)
+            .ok_or(std::io::ErrorKind::InvalidInput)?;
+        if fd.metadata()?.len() < bytes as u64 { fd.set_len(bytes as u64)?; }
+        // The file is private to this pool and is never truncated while a
+        // mapping exists. Only compositor-released buffers are written.
+        let ptr = unsafe { libc::mmap(std::ptr::null_mut(), bytes,
+            libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, fd.as_raw_fd(), 0) };
+        if ptr == libc::MAP_FAILED { return Err(std::io::Error::last_os_error()); }
+        Ok(Self { ptr: NonNull::new(ptr.cast()).expect("mmap returned null"), len })
+    }
+    fn pixels(&self) -> &[u32] {
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+    }
+    fn pixels_mut(&mut self) -> &mut [u32] {
+        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
+    }
+}
+
+impl Drop for MappedPixels {
+    fn drop(&mut self) {
+        unsafe { libc::munmap(self.ptr.as_ptr().cast(), self.len * 4); }
+    }
+}
+
+// Row runs keep fullscreen scrolling to one bulk copy/damage request while
+// avoiding writes to unchanged rows. Compare against the selected buffer for
+// copies, but against the last submitted buffer for surface damage.
+fn changed_rows(old: &[u32], new: &[u32], width: usize) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut start = None;
+    for (y, (a, b)) in old.chunks_exact(width).zip(new.chunks_exact(width)).enumerate() {
+        if a != b { start.get_or_insert(y); }
+        else if let Some(first) = start.take() { spans.push((first, y)); }
+    }
+    if let Some(first) = start { spans.push((first, new.len() / width)); }
+    spans
 }
 
 struct BufferPool {
     pool: Vec<Buffer>,
     shm: Main<WlShm>,
     format: Format,
+    last: Option<usize>,
 }
 
 // Keep compositor stalls bounded: None permits allocation; Some selects only
@@ -99,6 +145,7 @@ impl BufferPool {
             pool: Vec::new(),
             shm,
             format,
+            last: None,
         }
     }
 
@@ -130,54 +177,36 @@ impl BufferPool {
         (buf, buf_released)
     }
 
-    fn get_buffer(&mut self, size: (i32, i32)) -> std::io::Result<(File, &Main<WlBuffer>)> {
+    fn get_buffer(&mut self, size: (i32, i32)) -> std::io::Result<&mut Buffer> {
         let pos = select_buffer(self.pool.iter().map(|e| *e.buffer_state.borrow()))?;
-        let size_bytes = size.0 * size.1 * std::mem::size_of::<u32>() as i32;
-
-        // If possible, take an older shm_pool and create a new buffer in it
-        if let Some(idx) = pos {
-            // Shm_pool not allowed to be truncated
-            if size_bytes > self.pool[idx].pool_size {
-                self.pool[idx].pool.resize(size_bytes);
-                self.pool[idx].pool_size = size_bytes;
-            }
-
-            // Different buffer size
+        let size_bytes = size.0 * size.1 * 4;
+        let idx = if let Some(idx) = pos {
             if self.pool[idx].fb_size != size {
+                let pixels = MappedPixels::new(&self.pool[idx].fd, size_bytes as usize / 4)?;
+                if size_bytes > self.pool[idx].pool_size {
+                    self.pool[idx].pool.resize(size_bytes);
+                    self.pool[idx].pool_size = size_bytes;
+                }
                 let new_buffer = Self::create_shm_buffer(&self.pool[idx].pool, size, self.format);
                 let old_buffer = std::mem::replace(&mut self.pool[idx].buffer, new_buffer.0);
                 self.pool[idx].buffer_state = new_buffer.1;
                 old_buffer.destroy();
                 self.pool[idx].fb_size = size;
+                self.pool[idx].pixels = pixels;
             }
-
-            let fd = self.pool[idx].fd.try_clone()?;
-            // A released buffer becomes compositor-owned again on submission.
-            // Never overwrite it until its own next wl_buffer.release event.
-            *self.pool[idx].buffer_state.borrow_mut() = false;
-            Ok((fd, &self.pool[idx].buffer))
+            idx
         } else {
-            let tempfile = tempfile::tempfile()?;
-            let shm_pool = self.shm.create_pool(
-                tempfile.as_raw_fd(),
-                size.0 * size.1 * std::mem::size_of::<u32>() as i32,
-            );
-            let buffer = Self::create_shm_buffer(&shm_pool, size, self.format);
-
-            self.pool.push(Buffer {
-                fd: tempfile,
-                pool: shm_pool,
-                pool_size: size_bytes,
-                buffer: buffer.0,
-                buffer_state: buffer.1,
-                fb_size: size,
-            });
-
-            Ok((
-                self.pool[self.pool.len() - 1].fd.try_clone()?,
-                &self.pool[self.pool.len() - 1].buffer,
-            ))
-        }
+            let fd = tempfile::tempfile()?;
+            let pixels = MappedPixels::new(&fd, size_bytes as usize / 4)?;
+            let pool = self.shm.create_pool(fd.as_raw_fd(), size_bytes);
+            let (buffer, buffer_state) = Self::create_shm_buffer(&pool, size, self.format);
+            self.pool.push(Buffer { fd, pool, pool_size: size_bytes, buffer,
+                buffer_state, fb_size: size, pixels });
+            self.pool.len() - 1
+        };
+        self.last = Some(idx);
+        *self.pool[idx].buffer_state.borrow_mut() = false;
+        Ok(&mut self.pool[idx])
     }
 }
 
@@ -245,24 +274,13 @@ impl DisplayInfo {
 
         // Retrive shm buffer for writing
         let mut buf_pool = BufferPool::new(shm.clone(), format);
-        let (mut tempfile, buffer) = buf_pool
+        let entry = buf_pool
             .get_buffer(size)
             .map_err(|e| Error::WindowCreate(format!("Failed to retrieve Buffer: {:?}", e)))?;
 
         // Add a black canvas into the framebuffer
-        let frame: Vec<u32> = vec![0xFF00_0000; (size.0 * size.1) as usize];
-        let slice = unsafe {
-            std::slice::from_raw_parts(
-                frame.as_ptr() as *const u8,
-                frame.len() * std::mem::size_of::<u32>(),
-            )
-        };
-        tempfile
-            .write_all(slice)
-            .map_err(|e| Error::WindowCreate(format!("Io Error: {:?}", e)))?;
-        tempfile
-            .flush()
-            .map_err(|e| Error::WindowCreate(format!("Io Error: {:?}", e)))?;
+        entry.pixels.pixels_mut().fill(0xFF00_0000);
+        let buffer = &entry.buffer;
 
         let xdg_wm_base = globals.instantiate_exact::<XdgWmBase>(1).map_err(|e| {
             Error::WindowCreate(format!("Failed to retrieve the XdgWmBase: {:?}", e))
@@ -412,7 +430,11 @@ impl DisplayInfo {
 
     // Resizes when buffer is bigger or less
     fn update_framebuffer(&mut self, buffer: &[u32], size: (i32, i32)) -> std::io::Result<()> {
-        let (mut fd, buf) = match self.buf_pool.get_buffer(size) {
+        let damage = match self.buf_pool.last.map(|i| &self.buf_pool.pool[i]) {
+            Some(last) if last.fb_size == size => changed_rows(last.pixels.pixels(), buffer, size.0 as usize),
+            _ => vec![(0, size.1 as usize)],
+        };
+        let entry = match self.buf_pool.get_buffer(size) {
             Ok(buffer) => buffer,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 // update_with_buffer_stride still dispatches release events.
@@ -424,26 +446,21 @@ impl DisplayInfo {
             Err(error) => return Err(error),
         };
 
-        fd.seek(SeekFrom::Start(0))?;
-
-        let slice = unsafe {
-            std::slice::from_raw_parts(
-                buffer.as_ptr() as *const u8,
-                buffer.len() * std::mem::size_of::<u32>(),
-            )
-        };
-
-        fd.write_all(slice)?;
-        fd.flush()?;
+        let pixels = entry.pixels.pixels_mut();
+        for (start, end) in changed_rows(pixels, buffer, size.0 as usize) {
+            let range = start * size.0 as usize..end * size.0 as usize;
+            pixels[range.clone()].copy_from_slice(&buffer[range]);
+        }
 
         // Acknowledge the last configure event
         if let Some(serial) = (*self.xdg_config.borrow_mut()).take() {
             self.xdg_surface.ack_configure(serial);
         }
 
-        self.surface.attach(Some(buf), 0, 0);
-        self.surface
-            .damage(0, 0, i32::max_value(), i32::max_value());
+        self.surface.attach(Some(&entry.buffer), 0, 0);
+        for (start, end) in damage {
+            self.surface.damage(0, start as i32, size.0, (end - start) as i32);
+        }
         self.surface.commit();
 
         self.redraw_pending = false;
@@ -1440,6 +1457,73 @@ impl Drop for Window {
 #[cfg(test)]
 mod fjern_buffer_tests {
     use super::*;
+
+    #[test]
+    #[ignore = "release CPU benchmark; does not measure compositor presentation"]
+    fn benchmark_fullscreen_submission() {
+        use std::io::{Seek, SeekFrom, Write};
+        let mut fd = tempfile::tempfile().unwrap();
+        let mut mapped = MappedPixels::new(&fd, 3840 * 2160).unwrap();
+        let mut pixels = vec![0u32; 3840 * 2160];
+        let mut samples = [Vec::new(), Vec::new()];
+        for batch in 0..6 {
+            for kind in if batch % 2 == 0 { [0, 1] } else { [1, 0] } {
+                let mut elapsed = Duration::ZERO;
+                for frame in 0..30 {
+                    pixels.fill((frame + batch * 30 + 1) as u32);
+                    let start = std::time::Instant::now();
+                    if kind == 0 {
+                        fd.seek(SeekFrom::Start(0)).unwrap();
+                        let bytes = unsafe { std::slice::from_raw_parts(pixels.as_ptr().cast(), pixels.len() * 4) };
+                        fd.write_all(bytes).unwrap();
+                        fd.flush().unwrap();
+                    } else {
+                        std::hint::black_box(changed_rows(mapped.pixels(), &pixels, 3840));
+                        let output = mapped.pixels_mut();
+                        for (a, b) in changed_rows(output, &pixels, 3840) {
+                            output[a * 3840..b * 3840].copy_from_slice(&pixels[a * 3840..b * 3840]);
+                        }
+                    }
+                    elapsed += start.elapsed();
+                    assert_eq!(mapped.pixels(), pixels);
+                }
+                samples[kind].push(elapsed.as_secs_f64() * 1000.0 / 30.0);
+            }
+        }
+        for times in &mut samples { times.sort_by(f64::total_cmp); }
+        eprintln!("4K full-change submission: file {:.3} ms, mapped damage {:.3} ms", samples[0][3], samples[1][3]);
+    }
+
+    #[test]
+    fn mapped_damage_preserves_reused_buffers_and_reverted_surface() {
+        let files: Vec<_> = (0..3).map(|_| tempfile::tempfile().unwrap()).collect();
+        let mut maps: Vec<_> = files.iter().map(|fd| MappedPixels::new(fd, 64).unwrap()).collect();
+        let mut previous = vec![0; 64];
+        for (frame, index) in [0, 1, 2, 0, 2, 1, 0].iter().copied().enumerate() {
+            let mut next = vec![0; 64];
+            if frame % 2 == 0 { next[frame * 8] = frame as u32 + 1; }
+            let surface_damage = changed_rows(&previous, &next, 8);
+            let mut reconstructed = previous.clone();
+            for (a, b) in surface_damage {
+                reconstructed[a * 8..b * 8].copy_from_slice(&next[a * 8..b * 8]);
+            }
+            assert_eq!(reconstructed, next);
+            let map = maps[index].pixels_mut();
+            for (a, b) in changed_rows(map, &next, 8) {
+                map[a * 8..b * 8].copy_from_slice(&next[a * 8..b * 8]);
+            }
+            assert_eq!(map, next);
+            previous = next;
+        }
+        assert!(changed_rows(&previous, &previous, 8).is_empty());
+        assert_eq!(changed_rows(&vec![0; 64], &vec![1; 64], 8), vec![(0, 8)]);
+        // Growth and shrink/remap preserve backing-file size and valid access.
+        maps[0] = MappedPixels::new(&files[0], 128).unwrap();
+        maps[0].pixels_mut()[127] = 42;
+        maps[0] = MappedPixels::new(&files[0], 16).unwrap();
+        assert_eq!(maps[0].pixels().len(), 16);
+        assert_eq!(files[0].metadata().unwrap().len(), 512);
+    }
 
     #[test]
     fn pool_waits_at_capacity_and_reuses_only_released_storage() {
